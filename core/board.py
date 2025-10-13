@@ -52,6 +52,27 @@ class Board:
     self.grid = [[Square() for _ in range(w)] for _ in range(h)]
     self._royal_pos = {"w": set(), "b": set()}
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
+    
+  def compute_en_passant_target(self, mv: "Move", piece: "Piece"):
+    """
+    Tính EP target sau một nước double-step.
+
+    Trả về:
+      ((tx_target, ty_target), (cx, cy)) theo schema:
+        - (tx_target, ty_target): ô mà quân đối phương sẽ "đi đến" khi bắt EP
+                                  (chính là ô trung gian mà tốt đã "đi qua").
+        - (cx, cy): ô chứa nạn nhân để xóa khi thực thi EP-capture
+                    (chính là ô đích của nước double-step hiện tại).
+
+    Yêu cầu: mv.is_double_step == True. Không kiểm tra royal/check tại đây.
+    """
+    if not getattr(mv, "is_double_step", False):
+      return None
+    # Ô trung gian trên trục dọc giữa nguồn và đích (đường thẳng theo cột)
+    midx = (mv.fx + mv.tx) // 2
+    midy = mv.ty
+    # Nạn nhân là quân vừa đứng ở ô đích của double-step
+    return [(midx, midy), (mv.tx, mv.ty)]
       
   def apply_move(self, mv: "Move") -> None:
     """
@@ -122,7 +143,7 @@ class Board:
       if callable(compute):
         try:
           ep_pair = compute(mv, piece)  # kỳ vọng ((tx,ty),(cx,cy)) hoặc None
-          if ep_pair and isinstance(ep_pair, tuple) and len(ep_pair) == 2:
+          if ep_pair and isinstance(ep_pair, list) and len(ep_pair) == 2:
             self.en_passant_target = ep_pair
         except Exception:
           # Bỏ qua lỗi set EP để nước đi vẫn hoàn tất
@@ -449,3 +470,4 @@ if __name__ == "__main__":
   print("EP sau khi đi:", getattr(b, "en_passant_target"))
   
   print(b.as_ascii())
+  print(b.en_passant_target)
