@@ -1,0 +1,454 @@
+# chess-variant\core\board.py
+from __future__ import annotations
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from typing import List,TYPE_CHECKING
+from core.piece import Piece
+from core.piece_factory import create
+from core.coords import from_alg,to_alg
+from core.move import Move
+
+class Square:
+  """Ô vuông: chứa Piece hoặc None."""
+  __slots__ = ("piece",)
+  piece: Piece | None
+
+  def __init__(self, piece: Piece | None = None) -> None:
+    """Mặc định trống (None)."""
+    self.piece = piece
+
+  def set_piece(self, piece: Piece | None) -> None:
+    """Đặt/xóa quân (None để xóa)."""
+    self.piece = piece
+
+  def glyph(self) -> str:
+    """Glyph 2 ký tự; trống là '..'."""
+    return self.piece.glyph() if self.piece is not None else ".."
+
+
+class Board:
+  """
+  Bàn cờ mặc định 10×10.
+
+  Hệ trục:
+    - Gốc (0,0) ở góc trên–trái.
+    - trục x: tăng xuống dưới (0..h-1).
+    - trục y: tăng sang phải (0..w-1).
+
+  Lưu ý: grid[x][y] (hàng = x, cột = y).
+  """
+  __slots__ = ("w", "h", "grid", "_royal_pos", "en_passant_target")
+  w: int
+  h: int
+  grid: List[List[Square]]  # grid[x][y]
+  _roayal_pos: dict[str, set[tuple[int,int]]]
+  en_passant_target: list[tuple[int, int]] | None
+
+  def __init__(self, w: int = 10, h: int = 10) -> None:
+    """Tạo bàn rỗng w×h (mặc định 10×10), mỗi ô là Square(None)."""
+    self.w = w
+    self.h = h
+    self.grid = [[Square() for _ in range(w)] for _ in range(h)]
+    self._royal_pos = {"w": set(), "b": set()}
+    self.en_passant_target = []   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
+    
+  def _mv_src(self, mv) -> tuple[int, int]:
+    """
+    Trích tọa độ nguồn của Move theo kiểu duck-typing.
+    Thử lần lượt: (x,y), (sx,sy), (from_x,from_y), (x1,y1).
+    """
+    for a, b in (('x','y'), ('sx','sy'), ('from_x','from_y'), ('x1','y1')):
+      if hasattr(mv, a) and hasattr(mv, b):
+        return getattr(mv, a), getattr(mv, b)
+    raise AttributeError("Move source coordinates not found.")
+      
+  def apply_move(self, mv: "Move") -> None:
+    """
+    Thực thi một pseudo-legal Move trên bàn cờ.
+
+    Hỗ trợ:
+      - Nước đi thường & ăn thường (ghi đè ô đích nếu là đối phương).
+      - En passant:
+        • Khi Move.is_en_passant=True: đọc self.en_passant_target == ((tx,ty),(cx,cy)),
+          yêu cầu (tx,ty) == (mv.nx,mv.ny); xóa quân tại (cx,cy) rồi mới di chuyển.
+        • Sau khi thực thi: reset EP về None.
+      - Set/Reset EP:
+        • Mặc định reset: self.en_passant_target = None.
+        • Nếu mv.is_double_step=True (Pawn/Sergeant):
+          gọi hook self.compute_en_passant_target(mv, piece) (nếu có) để nhận
+          ((tx,ty),(cx,cy)); hợp lệ thì gán.
+
+    Ghi chú:
+      - Không kiểm tra “royal safety”.
+      - Promotion (mv.promotion_to) xử lý ở cuối (nếu có).
+    """
+    # 0) Lấy quân xuất phát
+    piece = self.at(mv.x, mv.y)
+    if piece is None:
+      raise ValueError(f"No piece at source ({mv.x},{mv.y}).")
+
+    # 1) Nếu là en passant: xóa nạn nhân trước khi di chuyển
+    if getattr(mv, "is_en_passant", False):
+      ep = getattr(self, "en_passant_target", None)
+      if not ep:
+        raise ValueError("EN PASSANT move but no en_passant_target set.")
+      (tx, ty), (cx, cy) = ep
+      if (tx, ty) != (mv.nx, mv.ny):
+        raise ValueError("EN PASSANT destination mismatch.")
+      victim = self.at(cx, cy)
+      if victim is None or victim.color == piece.color:
+        raise ValueError("Invalid EN PASSANT victim square.")
+      self.clear(cx, cy)  # xóa nạn nhân EP
+
+    # 2) Ăn thường: nếu ô đích có quân đối phương thì xóa (không áp dụng cho EP)
+    dst = self.at(mv.nx, mv.ny)
+    if dst is not None and dst.color == piece.color:
+      raise ValueError("Destination occupied by same-color piece.")
+    if dst is not None and not getattr(mv, "is_en_passant", False):
+      self.clear(mv.nx, mv.ny)
+
+    # 3) Di chuyển quân (nguồn -> đích)
+    self.clear(mv.x, mv.y)
+    self._check_bounds(mv.nx, mv.ny)
+    self._grid[mv.nx][mv.ny] = piece
+
+    # 4) Promotion (nếu có)
+    promo_to = getattr(mv, "promotion_to", None)
+    if promo_to:
+      try:
+        from .piece_factory import create
+        newp = create(promo_to, piece.color)
+        self._grid[mv.nx][mv.ny] = newp
+      except Exception:
+        # Không promote được thì giữ nguyên quân hiện tại
+        pass
+
+    # 5) Set/Reset EP
+    # Mặc định: reset
+    self.en_passant_target = None
+
+    # Nếu double-step: gọi hook để tính EP target theo biến thể của bạn
+    if getattr(mv, "is_double_step", False):
+      compute = getattr(self, "compute_en_passant_target", None)
+      if callable(compute):
+        try:
+          ep_pair = compute(mv, piece)  # kỳ vọng ((tx,ty),(cx,cy)) hoặc None
+          if ep_pair and isinstance(ep_pair, tuple) and len(ep_pair) == 2:
+            self.en_passant_target = ep_pair
+        except Exception:
+          # Không bật EP nếu hook lỗi
+          pass
+
+    return
+      
+  def collect_moves(self, x: int, y: int) -> list[Move]:
+    """Trả về list[Move] cho quân ở (x,y); nếu quân còn trả (tx,ty) thì bọc thành Move."""
+    self._check_bounds(x, y)
+    piece = self.at(x, y)  # luôn trả Piece | None từ Square
+    if piece is None:
+      return []
+    res = piece.generate_moves(self, x, y)
+    if not res:
+      return []
+    res_list = list(res)  # hỗ trợ iterator/generator
+    if not res_list:
+      return []
+    if isinstance(res_list[0], Move):
+      return res_list
+    out: list[Move] = []
+    for (tx, ty) in res_list:
+      out.append(Move(x, y, tx, ty, piece))
+    return out
+  
+  def promotion_candidates(self):
+    """Return iterable of allowed promotion symbols for `side`."""
+    return ["Q", "R", "N", "K", "M", "V", "Y", "δ", "H"]
+  
+  def pawn_start_rows(self, side: str) -> set[int]:
+    """Return the set of x-indices (0-based) where Pawn/Sergeant may double-step.
+    Quy ước dự án:
+    - White: rows 2 & 3 (1-based) -> {1, 2}
+    - Black: rows 9 & 8 (1-based) -> {8, 7}
+    """
+    return {7, 8} if side == "white" else {1, 2}
+    
+  def promotion_row(self, side: str) -> int:
+    """Return the x-index (0-based) of the promotion row for `side`.
+    Quy ước dự án:
+    - White: hàng thứ 9 (1-based) -> x = 8
+    - Black: hàng thứ 2 (1-based) -> x = 1
+    """
+    return 1 if side == "white" else 8
+  
+  def set_royal(self, x: int, y: int, flag: bool = True) -> None:
+    """
+    Gán/cởi cờ 'royal' cho quân tại (x,y) và cập nhật cache vị trí royal.
+    Raises:
+      ValueError: nếu ô trống.
+    """
+    p = self.at(x, y)
+    if p is None:
+      raise ValueError(f"Không có quân tại (x={x}, y={y}) để gán royal.")
+    # Bỏ (x,y) khỏi cả hai set phòng trường hợp đổi màu/di chuyển trước đó
+    self._royal_pos["w"].discard((x, y))
+    self._royal_pos["b"].discard((x, y))
+    p.set_royal(flag)
+    if flag:
+      self._royal_pos[p.color].add((x, y))
+  
+  def royal_positions(self) -> dict[str, list[tuple[int, int]]]:
+    """Trả về vị trí các quân 'royal' theo màu từ cache (O(1))."""
+    return {
+      "w": list(self._royal_pos["w"]),
+      "b": list(self._royal_pos["b"]),
+    }
+
+  def setup_from_layout(self) -> None:
+    """
+    Khởi tạo bàn cờ 10×10 từ một chuỗi bố cục có padding.
+
+    Quy ước chuỗi:
+      - Các hàng ngăn bởi dấu '/'.
+      - Trong mỗi hàng, các mục ngăn bởi ','.
+      - 'x' là padding: bỏ qua.
+      - '10' nghĩa là 10 ô trống liên tiếp (chỉ giá trị này, không hỗ trợ số khác).
+      - Token quân có dạng '<c><k>' với:
+          c ∈ {'r','y'} (r→white, y→black),
+          k là mã quân (K,Q,R,B,N,P,M,V,Y,δ,H,...).
+      - Sau khi bỏ padding, **mỗi hàng nội dung phải có đúng 10 ô**.
+      - Tổng số hàng nội dung sau khi bỏ padding phải đúng bằng 10.
+
+    Hệ trục:
+      - Góc trên-trái là (x=0, y=0); x tăng xuống dưới, y tăng sang phải.
+
+    Raises:
+      ValueError: Khi token không hợp lệ, số ô một hàng ≠ 10, hoặc số hàng nội dung ≠ 10.
+      (Thông báo lỗi nêu rõ hàng/cột gây lỗi khi có thể.)
+    """
+    layout="""
+          x,x,x,x,x,x,x,x,x,x,x,x,x,x/
+          x,x,x,x,x,x,x,x,x,x,x,x,x,x/
+          x,x,yV,yY,yR,yH,yQ,yK,yH,yR,yY,yV,x,x/
+          x,x,yM,yδ,yN,yδ,yY,yY,yδ,yN,yδ,yM,x,x/
+          x,x,yK,yP,yP,yP,yP,yP,yP,yP,yP,yK,x,x/
+          x,x,10,x,x/
+          x,x,10,x,x/
+          x,x,10,x,x/
+          x,x,10,x,x/
+          x,x,rK,rP,rP,rP,rP,rP,rP,rP,rP,rK,x,x/
+          x,x,rM,rδ,rN,rδ,rY,rY,rδ,rN,rδ,rM,x,x/
+          x,x,rV,rY,rR,rH,rQ,rK,rH,rR,rY,rV,x,x/
+          x,x,x,x,x,x,x,x,x,x,x,x,x,x/
+          x,x,x,x,x,x,x,x,x,x,x,x,x,x
+          """.strip()
+    for x in range(self.h):
+      for y in range(self.w):
+        self.grid[x][y].set_piece(None)
+
+    color_map = {"r": "w", "y": "b"}
+    rows = [r.strip() for r in layout.strip().split("/") if r.strip()]
+
+    board_x = 0  # chỉ số hàng thực (0..9) sau khi loại padding
+
+    for src_row_index, row in enumerate(rows):
+      tokens = [t.strip() for t in row.split(",") if t.strip()]
+      cells: list[tuple[str, str] | None] = []
+
+      # 2) Parse từng token trong hàng
+      for tok in tokens:
+        if tok == "x":
+          # padding - bỏ qua
+          continue
+        if tok == "10":
+          # đúng 10 ô trống liên tiếp
+          cells.extend([None] * 10)
+          continue
+        # token quân: 'rK', 'yP', 'yδ', ...
+        if len(tok) >= 2 and tok[0] in color_map:
+          clr = color_map[tok[0]]
+          kind = tok[1:]  # hỗ trợ cả ký tự nhiều byte như 'δ'
+          cells.append((kind, clr))
+          continue
+
+        # Nếu vào đây là token không hợp lệ
+        raise ValueError(f"Token không hợp lệ ở hàng nguồn {src_row_index}: '{tok}'")
+
+      # Bỏ qua hàng toàn padding (không có '10' và cũng không có quân)
+      if not cells:
+        continue
+
+      # 3) Mỗi hàng nội dung phải có đúng self.w ô
+      if len(cells) != self.w:
+        raise ValueError(
+          f"Hàng nội dung thứ {board_x} sau khi bỏ padding không có đúng {self.w} ô (thực tế: {len(cells)})."
+        )
+
+      # 4) Đặt quân lên lưới
+      for y, cell in enumerate(cells):
+        if cell is None:
+          # ô trống
+          self.grid[board_x][y].set_piece(None)
+        else:
+          kind, clr = cell
+          try:
+            self.grid[board_x][y].set_piece(create(kind, clr))
+          except Exception as e:
+            # Nêu rõ vị trí hàng/cột sau khi chuẩn hóa
+            raise ValueError(
+              f"Token không hợp lệ ở (hàng={board_x}, cột={y}): '{clr[0]}{kind}'. Lỗi gốc: {e}"
+            ) from e
+
+      board_x += 1
+      if board_x > self.h:
+        raise ValueError(
+          f"Số hàng nội dung vượt quá {self.h} (đã thấy > {self.h} hàng sau khi loại padding)."
+        )
+
+    # 5) Tổng kết: phải có đúng self.h hàng nội dung
+    if board_x != self.h:
+      raise ValueError(f"Số hàng nội dung ≠ {self.h} (thực tế: {board_x}).")
+    
+    self.set_royal_alg('f',1)
+    self.set_royal_alg('f',10)
+
+  def set_royal(self, x: int, y: int, flag: bool = True) -> None:
+    """
+    Gán/cởi cờ 'royal' cho quân tại (x,y) và đồng bộ cache.
+    Raises:
+      ValueError: nếu ô trống.
+    """
+    self._check_bounds(x, y)
+    p = self.at(x, y)
+    if p is None:
+      raise ValueError(f"Không có quân tại (x={x}, y={y}) để gán royal.")
+
+    # Loại khỏi cache ở vị trí hiện tại (dù màu nào) để tránh dư thừa
+    self._royal_pos["w"].discard((x, y))
+    self._royal_pos["b"].discard((x, y))
+
+    # Cập nhật cờ royal trên quân cờ (ưu tiên method công khai)
+    if hasattr(p, "set_royal"):
+      p.set_royal(flag)
+    else:
+      p._is_royal = flag  # fallback nếu chưa có API
+
+    # Nếu bật royal → thêm lại vào cache theo màu hiện tại
+    if flag:
+      self._royal_pos[p.color].add((x, y))
+  
+  def set_royal_alg(self, file: str, rank: int, flag: bool = True) -> None:
+    """
+    Gán/cởi cờ 'royal' theo ký hiệu file-rank CHUẨN CỜ (rank 1 ở dưới).
+    Ví dụ: set_royal_alg('E', 1, True)
+    Raises:
+      ValueError: nếu ô trống hoặc ký hiệu ngoài biên.
+    """
+    x, y = from_alg(f"{(file or '').strip()}{rank}", self.h, self.w)
+    self.set_royal(x, y, flag)
+  
+  def put(self, x: int, y: int, kind: str, color: str) -> None:
+    """
+    Đặt/ghi-đè quân tại (x,y):
+      - Kiểm tra biên.
+      - Nếu ô đang có quân royal → loại khỏi cache trước.
+      - Tạo quân bằng factory rồi đặt vào ô.
+      - Nếu quân mới là royal → thêm vào cache.
+    Raises:
+      ValueError: nếu không tạo được quân (kind/color không hợp lệ).
+    """
+    self._check_bounds(x, y)
+
+    # Nếu đang có quân (đặc biệt là royal) thì gỡ khỏi cache trước khi ghi đè
+    old = self.at(x, y)
+    if old is not None and getattr(old, "is_royal", False):
+      self._royal_pos[old.color].discard((x, y))
+
+    # Tạo quân mới
+    try:
+      piece = create(kind, color)
+    except Exception as e:
+      raise ValueError(
+        f"Không tạo được quân tại (x={x}, y={y}) với kind='{kind}', color='{color}'. Lỗi gốc: {e}"
+      ) from e
+
+    # Đặt quân và cập nhật cache nếu là royal
+    self.grid[x][y].set_piece(piece)
+    if getattr(piece, "is_royal", False):
+      self._royal_pos[piece.color].add((x, y))
+
+  def as_ascii(self) -> str:
+    """
+    Chuỗi ASCII của bàn cờ.
+    In từ hàng trên xuống dưới: x = 0..h-1, mỗi ô rộng 3 ký tự.
+    """
+    lines: List[str] = []
+    for x in range(self.h):                       # hàng: trên → dưới
+      row = "".join(self.grid[x][y].glyph().ljust(3) for y in range(self.w))
+      lines.append(row.rstrip())
+    return "\n".join(lines)
+  
+  def clear(self, x: int, y: int) -> None:
+    """
+    Xóa quân tại (x,y) → None:
+      - Kiểm tra biên.
+      - Nếu ô có quân royal → loại khỏi cache.
+      - Đặt None vào ô (idempotent nếu sẵn trống).
+    """
+    self._check_bounds(x, y)
+
+    p = self.at(x, y)
+    if p is not None and getattr(p, "is_royal", False):
+      self._royal_pos[p.color].discard((x, y))
+
+    self.grid[x][y].set_piece(None)
+  
+  def put_alg(self, file: str, rank: int, kind: str, color: str) -> None:
+    """
+    Đặt quân theo 'file-rank' với hệ trục gốc trên–trái:
+      - file: 'a'..'j'  → y = ord(file) - ord('a') (trái→phải)
+      - rank: 1..10     → x = rank - 1            (trên→dưới)
+    """
+    x,y=from_alg(file+str(rank),self.h,self.w)
+    return self.put(x,y,kind,color)
+
+  def clear_alg(self, file: str, rank: int) -> None:
+    """
+    Xóa quân theo ký hiệu file-rank CHUẨN CỜ (rank 1 ở dưới).
+    - file: 'A'.. (không phân biệt hoa/thường)
+    - rank: 1..h
+    Raises:
+      ValueError: nếu ký hiệu ngoài biên/không hợp lệ.
+    """
+    x, y = from_alg(f"{(file or '').strip()}{rank}", self.h, self.w)
+    self.clear(x, y)
+
+  def at(self, x: int, y: int) -> Piece | None:
+    """Trả về Piece tại (x,y) hoặc None nếu ô trống."""
+    self._check_bounds(x, y)
+    return self.grid[x][y].piece
+
+  def at_alg(self, file: str, rank: int) -> "Piece | None":
+    """
+    Lấy quân ở ô ký hiệu file-rank CHUẨN CỜ (rank 1 ở dưới):
+      - file: 'A'.. (không phân biệt hoa/thường), tăng từ trái → phải.
+      - rank: 1..h (1 ở hàng dưới cùng).
+    Trả về:
+      - Piece nếu có quân; None nếu ô trống.
+    Raises:
+      ValueError: nếu ký hiệu ngoài biên hay không hợp lệ.
+    """
+    x, y = from_alg(f"{(file or '').strip()}{rank}", self.h, self.w)
+    return self.at(x, y)
+
+  def _check_bounds(self, x: int, y: int) -> None:
+    """Kiểm tra (x,y) nằm trong bàn; ném IndexError nếu vượt biên."""
+    if not (0 <= x < self.h and 0 <= y < self.w):
+      raise IndexError(f"out of board bounds: (x={x}, y={y})")
+
+if __name__ == "__main__":
+  b = Board(10, 10)
+  b.setup_from_layout()
+  b.put(5,0,'P','b')
+  print(b.as_ascii())
+  print(b.collect_moves(7,1))
