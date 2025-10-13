@@ -273,13 +273,13 @@ class Pawn(Piece):
                 moves.append(Move(x, y, nx, ny, self))
           except Exception:
             pass
-
+      
       # 7) En passant — chỉ chéo; schema: [(tx,ty), (cx,cy)]
       try:
         ep_pair = board.en_passant_target
       except Exception:
         ep_pair = None
-
+      
       if ep_pair:
         try:
           (tx, ty), (cx, cy) = ep_pair  # list[tuple]

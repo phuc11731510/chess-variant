@@ -84,7 +84,7 @@ class Board:
 
     Hỗ trợ:
       - Nước đi thường & ăn thường.
-      - En passant: đọc self.en_passant_target == ((tx,ty),(cx,cy)),
+      - En passant: đọc self.en_passant_target == [(tx,ty),(cx,cy)],
         yêu cầu (tx,ty) == (mv.tx,mv.ty); xóa quân tại (cx,cy) rồi di chuyển.
       - Set/Reset EP: mặc định reset; nếu mv.is_double_step thì gọi
         compute_en_passant_target(mv, piece) (nếu có) để gán EP mới.
@@ -92,18 +92,18 @@ class Board:
 
     Ghi chú:
       - Không kiểm tra “royal safety”.
-      - Không đổi lượt, không ghi lịch sử tại đây (nếu có, xử lý nơi khác).
+      - Không đổi lượt/không ghi lịch sử tại đây.
     """
-    # 0) Lấy quân xuất phát & kiểm tra cơ bản
+    # 0) Kiểm tra cơ bản & lấy quân nguồn
     self._check_bounds(mv.fx, mv.fy)
     self._check_bounds(mv.tx, mv.ty)
+
     piece = self.at(mv.fx, mv.fy)
     if piece is None:
       raise ValueError(f"No piece at source ({mv.fx},{mv.fy}).")
 
-    # Nếu mv.piece được set, kiểm tra tính nhất quán (không bắt buộc)
     if getattr(mv, "piece", None) is not None and mv.piece is not piece:
-      # Không raise cứng để linh hoạt; tuỳ dự án có thể đổi thành raise.
+      # tuỳ dự án có thể raise để siết chặt
       pass
 
     # 1) EN PASSANT: xoá nạn nhân trước khi di chuyển
@@ -117,36 +117,47 @@ class Board:
       victim = self.at(cx, cy)
       if victim is None or victim.color == piece.color:
         raise ValueError("Invalid EN PASSANT victim square.")
-      self.clear(cx, cy)  # xoá nạn nhân EP
+      self.clear(cx, cy)  # xoá nạn nhân EP trước
 
     # 2) Ăn thường (khi không phải EP)
-    dst = self.at(mv.tx, mv.ty)
-    if dst is not None and dst.color == piece.color:
+    dst_piece = self.at(mv.tx, mv.ty)
+    if dst_piece is not None and dst_piece.color == piece.color:
       raise ValueError("Destination occupied by same-color piece.")
-    if dst is not None and not mv.is_en_passant:
+    if dst_piece is not None and not mv.is_en_passant:
       self.clear(mv.tx, mv.ty)
 
-    # 3) Di chuyển quân (nguồn -> đích)
+    # 3) Di chuyển quân (nguồn -> đích) mà KHÔNG thay thế ô (Square)
+    #    - clear ô nguồn (đặt piece=None)
+    #    - đặt piece vào ô đích qua thuộc tính .piece
     self.clear(mv.fx, mv.fy)
-    self.grid[mv.tx][mv.ty] = piece  # piece tham chiếu giữ nguyên
+    dst_cell = self.grid[mv.tx][mv.ty]
+    try:
+      # Trường hợp grid là list[list[Square]]
+      dst_cell.piece = piece
+    except AttributeError:
+      # Fallback nếu grid chứa trực tiếp Piece/None (không mong muốn)
+      self.grid[mv.tx][mv.ty] = piece
 
-    # 4) Promotion (nếu có)
+    # 4) Promotion (nếu có): thay quân trong ô đích
     if mv.promotion_to:
       try:
         from .piece_factory import create
         promoted = create(mv.promotion_to, piece.color)
-        self.grid[mv.tx][mv.ty] = promoted
+        try:
+          dst_cell.piece = promoted
+        except AttributeError:
+          self.grid[mv.tx][mv.ty] = promoted
       except Exception:
         # Nếu promote lỗi, giữ nguyên quân hiện tại
         pass
 
-    # 5) Reset EP mặc định; nếu double-step thì set EP mới
+    # 5) Reset EP mặc định; nếu double-step thì set EP mới (schema: list-of-tuples)
     self.en_passant_target = None
     if mv.is_double_step:
       compute = getattr(self, "compute_en_passant_target", None)
       if callable(compute):
         try:
-          ep_pair = compute(mv, piece)  # kỳ vọng ((tx,ty),(cx,cy)) hoặc None
+          ep_pair = compute(mv, piece)  # kỳ vọng: [(tx,ty), (cx,cy)] hoặc None
           if ep_pair and isinstance(ep_pair, list) and len(ep_pair) == 2:
             self.en_passant_target = ep_pair
         except Exception:
@@ -440,7 +451,7 @@ class Board:
     """Trả về Piece tại (x,y) hoặc None nếu ô trống."""
     self._check_bounds(x, y)
     return self.grid[x][y].piece
-
+  
   def at_alg(self, file: str, rank: int) -> "Piece | None":
     """
     Lấy quân ở ô ký hiệu file-rank CHUẨN CỜ (rank 1 ở dưới):
