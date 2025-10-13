@@ -19,6 +19,22 @@ class General(Piece):
     """Khởi tạo General với color = 'w' hoặc 'b'."""
     super().__init__("M", color)
     
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu General (M) tại (sx, sy) khống chế ô (tx, ty).
+    - M = K + N: khống chế như King (1 ô kề, gồm chéo) HOẶC như Knight (L-jump).
+    - Độ phức tạp: O(1). Không xét lượt, EP hay “royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    # King-like (mọi ô kề, trừ chính nó)
+    if (dx | dy) != 0 and max(dx, dy) == 1:
+      return True
+    # Knight-like (L-jump)
+    return (dx == 1 and dy == 2) or (dx == 2 and dy == 1)
+    
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho General (M):
@@ -71,7 +87,21 @@ class Wildebeest(Piece):
   def __init__(self, color: str) -> None:
     """Khởi tạo Wildebeest với color = 'w' hoặc 'b'."""
     super().__init__("V", color)
-    
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Wildebeest (V) tại (sx, sy) khống chế ô (tx, ty).
+    - V = Knight (1,2) + Camel (3,1) — đều là leaper, không cần đường trống.
+    - Độ phức tạp: O(1). Không xét lượt/EP/“royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    # Knight (1,2) hoặc (2,1) — OR — Camel (1,3) hoặc (3,1)
+    return ((dx == 1 and dy == 2) or (dx == 2 and dy == 1) or
+            (dx == 1 and dy == 3) or (dx == 3 and dy == 1))
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Wildebeest (V):
@@ -112,7 +142,27 @@ class Alibaba(Piece):
   def __init__(self, color: str) -> None:
     """Khởi tạo Alibaba với color = 'w' hoặc 'b'."""
     super().__init__("Y", color)
-    
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Alibaba (Y) tại (sx, sy) khống chế ô (tx, ty).
+    - Quy tắc: nhảy đúng 2 ô theo 8 hướng (như King nhưng dài hơn 1 ô, có thể nhảy).
+      • Orthogonal: |dx|=2, dy=0 hoặc dx=0, |dy|=2
+      • Diagonal  : |dx|=|dy|=2
+    - Độ phức tạp: O(1). Không xét lượt/EP/“royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    if dx == 2 and dy == 0:  # 2 ô thẳng dọc
+      return True
+    if dx == 0 and dy == 2:  # 2 ô thẳng ngang
+      return True
+    if dx == 2 and dy == 2:  # 2 ô chéo
+      return True
+    return False
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Alibaba (Y):
@@ -147,6 +197,24 @@ class Sergeant(Piece):
   def __init__(self, color: str) -> None:
     """Khởi tạo Sergeant với color = 'w' hoặc 'b'."""
     super().__init__("δ", color)
+    
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Sergeant (δ) tại (sx, sy) khống chế ô (tx, ty).
+    Quy tắc khống chế:
+      - PHỤ THUỘC MÀU: đi "lên" theo hướng của màu.
+        • Trắng: dx = -1 (lên trên).
+        • Đen  : dx = +1 (xuống dưới).
+      - Một bước: THẲNG hoặc CHÉO về phía trước (3 ô trước mặt).
+        → Hợp lệ khi: tx == sx + step và |ty - sy| ∈ {0,1}.
+    Không xét EP/lượt/“royal safety”. Độ phức tạp: O(1).
+    """
+    step = -1 if self.color == 'w' else 1
+    if tx != sx + step:
+      return False
+    dy = ty - sy
+    if dy < 0: dy = -dy
+    return dy <= 1
     
   def _in_bounds(self, board: "Board", i: int, j: int) -> bool:
     """Trả về True nếu (i,j) nằm trong biên bàn cờ; False nếu ngoài biên.
@@ -251,7 +319,37 @@ class Archbishop(Piece):
   def __init__(self, color: str) -> None:
     """Khởi tạo Archbishop với color = 'w' hoặc 'b'."""
     super().__init__("H", color)
-    
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Archbishop (H) tại (sx, sy) khống chế ô (tx, ty).
+    - H = Bishop (tia chéo, bị chặn) + Knight (L-jump, không bị chặn).
+    - Độ phức tạp: Knight O(1), Bishop O(|khoảng cách|). Không xét lượt/EP/“royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+
+    # Knight (1,2)/(2,1)
+    if (dx == 1 and dy == 2) or (dx == 2 and dy == 1):
+      return True
+
+    # Bishop: cùng độ lệch |dx|==|dy|, quét tia chéo
+    if dx == dy and dx != 0:
+      at = board.at
+      stepx = 1 if tx > sx else -1
+      stepy = 1 if ty > sy else -1
+      x, y = sx + stepx, sy + stepy
+      while x != tx and y != ty:
+        if at(x, y) is not None:
+          return False
+        x += stepx
+        y += stepy
+      return True
+
+    return False
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Archbishop (H):

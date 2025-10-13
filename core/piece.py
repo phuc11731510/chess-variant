@@ -103,6 +103,19 @@ class King(Piece):
     """Create a King of given color."""
     super().__init__("K", color)
     
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu King (K) tại (sx, sy) khống chế ô (tx, ty).
+    - Độ phức tạp: O(1).
+    - King khống chế mọi ô kề (kể cả chéo) cách tối đa 1 ô.
+    - Không xét nhập thành, không xét lượt, không xét “royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    return (dx | dy) != 0 and max(dx, dy) == 1
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho King (Vua):
@@ -169,6 +182,42 @@ class Rook(Piece):
     """Create a Rook of given color."""
     super().__init__("R", color)
   
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Rook (R) tại (sx, sy) khống chế ô (tx, ty).
+    - Tối ưu: kiểm tra đồng hàng/đồng cột rồi quét 1 tia duy nhất đến trước ô đích.
+    - Bị chặn bởi quân đứng giữa; không cần quan tâm quân tại ô đích thuộc màu nào.
+    - Độ phức tạp: O(|khoảng cách|). Không xét lượt/EP/“royal safety”.
+    """
+    # Không thể khống chế chính ô mình đứng
+    if sx == tx and sy == ty:
+      return False
+
+    at = board.at
+
+    # Cùng hàng
+    if sx == tx:
+      step = 1 if ty > sy else -1
+      y = sy + step
+      while y != ty:
+        if at(sx, y) is not None:
+          return False
+        y += step
+      return True
+
+    # Cùng cột
+    if sy == ty:
+      step = 1 if tx > sx else -1
+      x = sx + step
+      while x != tx:
+        if at(x, sy) is not None:
+          return False
+        x += step
+      return True
+
+    # Khác hàng & cột → không khống chế
+    return False
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Rook (Xe):
@@ -201,7 +250,20 @@ class Knight(Piece):
   def __init__(self, color: str) -> None:
     """Create a Knight of given color."""
     super().__init__("N", color)
-    
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Knight (N) tại (sx, sy) khống chế ô (tx, ty).
+    - Độ phức tạp: O(1).
+    - Không xét EP, không xét lượt, không chặn đường (Knight nhảy).
+    - Không kiểm tra “royal safety”.
+    """
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    return (dx == 1 and dy == 2) or (dx == 2 and dy == 1)
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Knight (Mã):
@@ -231,6 +293,21 @@ class Pawn(Piece):
   def __init__(self, color: str) -> None:
     """Create a Pawn of given color."""
     super().__init__("P", color)
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Pawn (P) tại (sx, sy) khống chế ô (tx, ty).
+    - Quy tắc chuẩn: chỉ khống chế CHÉO về phía trước đúng 1 ô.
+      • Trắng: (tx, ty) = (sx - 1, sy ± 1)
+      • Đen  : (tx, ty) = (sx + 1, sy ± 1)
+    - Không phụ thuộc việc ô đích có quân hay trống (đây là khống chế, không phải di chuyển).
+    - Không xét en passant/lượt/“royal safety”. Độ phức tạp: O(1).
+    """
+    step = -1 if self.color == 'w' else 1
+    if tx != sx + step:
+      return False
+    dy = ty - sy
+    return dy == 1 or dy == -1
   
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
