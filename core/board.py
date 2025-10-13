@@ -39,11 +39,11 @@ class Board:
   Lưu ý: grid[x][y] (hàng = x, cột = y).
   """
   __slots__ = ("w", "h", "grid", "_royal_pos", "en_passant_target",
-               "_pieces")
+               "_pieces", "_royal_pos")
   w: int
   h: int
   grid: List[List[Square]]  # grid[x][y]
-  _roayal_pos: dict[str, set[tuple[int,int]]]
+  _royal_pos: dict[str, set[tuple[int,int]]]
   en_passant_target: list[tuple[int, int]] | None
   _pieces: dict[str,list[tuple[Piece,int,int]]]
 
