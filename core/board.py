@@ -51,7 +51,7 @@ class Board:
     self.h = h
     self.grid = [[Square() for _ in range(w)] for _ in range(h)]
     self._royal_pos = {"w": set(), "b": set()}
-    self.en_passant_target = []   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
+    self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
       
   def apply_move(self, mv: "Move") -> None:
     """
@@ -436,7 +436,15 @@ class Board:
 
 if __name__ == "__main__":
   b = Board(10, 10)
-  b.setup_from_layout()
-  b.put(5,0,'P','b')
+  b.put(1, 4, 'P', 'b')
+  
+  print("== Trạng thái ban đầu ==")
   print(b.as_ascii())
-  print(b.collect_moves(7,1))
+  print("EP trước khi đi:", getattr(b, "en_passant_target"))
+  
+  move_list=b.collect_moves(1,4)
+  mv=move_list[1]
+  print(mv)
+  b.apply_move(mv)
+  print(b.en_passant_target)
+  print(b.as_ascii())
