@@ -63,17 +63,25 @@ class Board:
         yêu cầu (tx,ty) == (mv.tx,mv.ty); xóa quân tại (cx,cy) rồi di chuyển.
       - Set/Reset EP: mặc định reset; nếu mv.is_double_step thì gọi
         compute_en_passant_target(mv, piece) (nếu có) để gán EP mới.
+      - Promotion: nếu mv.promotion_to khác None.
 
     Ghi chú:
       - Không kiểm tra “royal safety”.
-      - Promotion (mv.promotion_to) xử lý ở cuối (nếu có).
+      - Không đổi lượt, không ghi lịch sử tại đây (nếu có, xử lý nơi khác).
     """
-    # 0) Lấy quân xuất phát
+    # 0) Lấy quân xuất phát & kiểm tra cơ bản
+    self._check_bounds(mv.fx, mv.fy)
+    self._check_bounds(mv.tx, mv.ty)
     piece = self.at(mv.fx, mv.fy)
     if piece is None:
       raise ValueError(f"No piece at source ({mv.fx},{mv.fy}).")
 
-    # 1) Nếu là en passant: xóa nạn nhân trước khi di chuyển
+    # Nếu mv.piece được set, kiểm tra tính nhất quán (không bắt buộc)
+    if getattr(mv, "piece", None) is not None and mv.piece is not piece:
+      # Không raise cứng để linh hoạt; tuỳ dự án có thể đổi thành raise.
+      pass
+
+    # 1) EN PASSANT: xoá nạn nhân trước khi di chuyển
     if mv.is_en_passant:
       ep = getattr(self, "en_passant_target", None)
       if not ep:
@@ -84,9 +92,9 @@ class Board:
       victim = self.at(cx, cy)
       if victim is None or victim.color == piece.color:
         raise ValueError("Invalid EN PASSANT victim square.")
-      self.clear(cx, cy)  # xóa nạn nhân EP
+      self.clear(cx, cy)  # xoá nạn nhân EP
 
-    # 2) Ăn thường: nếu ô đích có quân đối phương thì xóa (không áp dụng cho EP)
+    # 2) Ăn thường (khi không phải EP)
     dst = self.at(mv.tx, mv.ty)
     if dst is not None and dst.color == piece.color:
       raise ValueError("Destination occupied by same-color piece.")
@@ -95,22 +103,20 @@ class Board:
 
     # 3) Di chuyển quân (nguồn -> đích)
     self.clear(mv.fx, mv.fy)
-    self._check_bounds(mv.tx, mv.ty)
-    self._grid[mv.tx][mv.ty] = piece
+    self._grid[mv.tx][mv.ty] = piece  # piece tham chiếu giữ nguyên
 
     # 4) Promotion (nếu có)
     if mv.promotion_to:
       try:
         from .piece_factory import create
-        newp = create(mv.promotion_to, piece.color)
-        self._grid[mv.tx][mv.ty] = newp
+        promoted = create(mv.promotion_to, piece.color)
+        self._grid[mv.tx][mv.ty] = promoted
       except Exception:
-        # Không promote được thì giữ nguyên quân hiện tại
+        # Nếu promote lỗi, giữ nguyên quân hiện tại
         pass
 
-    # 5) Set/Reset EP
-    self.en_passant_target = None  # reset mặc định
-
+    # 5) Reset EP mặc định; nếu double-step thì set EP mới
+    self.en_passant_target = None
     if mv.is_double_step:
       compute = getattr(self, "compute_en_passant_target", None)
       if callable(compute):
@@ -119,6 +125,7 @@ class Board:
           if ep_pair and isinstance(ep_pair, tuple) and len(ep_pair) == 2:
             self.en_passant_target = ep_pair
         except Exception:
+          # Bỏ qua lỗi set EP để nước đi vẫn hoàn tất
           pass
 
     return
