@@ -542,9 +542,11 @@ class Board:
 
 if __name__ == "__main__":
   b = Board(10, 10)
-  b.put(2, 2, 'R', 'b')      # xe đen tại (2,2)
-  b.put(2, 5, 'P', 'w')      # chặn tại (2,5)
-  print("\n[CASE 2] Rook (blocked)")
-  print("Expect False:", b.is_square_attacked(2, 7, 'b'))  # bị chặn bởi (2,5)
-  b.clear(2, 5)              # bỏ chặn
-  print("Expect True :", b.is_square_attacked(2, 7, 'b'))  # thông tia → True
+  b.setup_from_layout()
+  print(b.as_ascii())
+  print(b.royal_positions())
+  mv=Move(9,5,5,5,b.at(9,5))
+  b.apply_move(mv)
+  print(b.as_ascii())
+  print(b.royal_positions())
+  print(b.at(5,5))
