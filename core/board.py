@@ -103,14 +103,14 @@ class Board:
 
     # 3) Di chuyển quân (nguồn -> đích)
     self.clear(mv.fx, mv.fy)
-    self._grid[mv.tx][mv.ty] = piece  # piece tham chiếu giữ nguyên
+    self.grid[mv.tx][mv.ty] = piece  # piece tham chiếu giữ nguyên
 
     # 4) Promotion (nếu có)
     if mv.promotion_to:
       try:
         from .piece_factory import create
         promoted = create(mv.promotion_to, piece.color)
-        self._grid[mv.tx][mv.ty] = promoted
+        self.grid[mv.tx][mv.ty] = promoted
       except Exception:
         # Nếu promote lỗi, giữ nguyên quân hiện tại
         pass
@@ -446,5 +446,6 @@ if __name__ == "__main__":
   mv=move_list[1]
   print(mv)
   b.apply_move(mv)
-  print(b.en_passant_target)
+  print("EP sau khi đi:", getattr(b, "en_passant_target"))
+  
   print(b.as_ascii())
