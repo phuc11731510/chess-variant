@@ -147,7 +147,56 @@ class Queen(Piece):
   def __init__(self, color: str) -> None:
     """Create a Queen of given color."""
     super().__init__("Q", color)
-    
+  
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Trả về True nếu Queen (Q) tại (sx, sy) khống chế ô (tx, ty).
+    - Q = Rook (tia thẳng) + Bishop (tia chéo), bị chặn bởi quân đứng giữa.
+    - Độ phức tạp: O(|khoảng cách|). Không xét lượt/EP/“royal safety”.
+    """
+    if sx == tx and sy == ty:
+      return False
+
+    at = board.at
+
+    # Rook-like: cùng hàng
+    if sx == tx:
+      step = 1 if ty > sy else -1
+      y = sy + step
+      while y != ty:
+        if at(sx, y) is not None:
+          return False
+        y += step
+      return True
+
+    # Rook-like: cùng cột
+    if sy == ty:
+      step = 1 if tx > sx else -1
+      x = sx + step
+      while x != tx:
+        if at(x, sy) is not None:
+          return False
+        x += step
+      return True
+
+    # Bishop-like: chéo
+    dx = tx - sx
+    dy = ty - sy
+    if dx < 0: dx = -dx
+    if dy < 0: dy = -dy
+    if dx == dy and dx != 0:
+      stepx = 1 if tx > sx else -1
+      stepy = 1 if ty > sy else -1
+      x, y = sx + stepx, sy + stepy
+      while x != tx and y != ty:
+        if at(x, y) is not None:
+          return False
+        x += stepx
+        y += stepy
+      return True
+
+    return False
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
     Pseudo-legal moves cho Queen (Hậu):

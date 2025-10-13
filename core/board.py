@@ -56,6 +56,28 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def is_square_attacked(self, x: int, y: int, by_color: str) -> bool:
+    """
+    Trả về True nếu ô (x,y) đang bị bên `by_color` khống chế.
+
+    Hiệu năng:
+      - Duyệt CHỈ các quân của `by_color` từ chỉ mục self._pieces → O(P) với P ≈ số quân màu đó.
+      - Thoát sớm ngay khi có 1 quân tấn công tới (x,y).
+      - Dựa vào Piece.can_attack(...) nên KHÔNG sinh list Move; EP mặc nhiên bị bỏ qua.
+
+    Ghi chú:
+      - Yêu cầu các quân đã có can_attack tối ưu (N,K,M,δ,Y,V,H,R,B,Q,P…).
+      - An toàn trước mục chỉ mục “lỗi thời” bằng cách đối chiếu lại p tại (i,j).
+    """
+    at = self.at
+    bucket = self._pieces.get(by_color, ())
+    for p, i, j in bucket:
+      if at(i, j) is not p:
+        continue
+      if p.can_attack(self, i, j, x, y):
+        return True
+    return False
+  
   def _index_remove(self, x: int, y: int) -> None:
     """Gỡ quân tại (x,y) khỏi chỉ mục (nếu đang có). An toàn với ô trống."""
     p = self.at(x, y)
@@ -520,8 +542,9 @@ class Board:
 
 if __name__ == "__main__":
   b = Board(10, 10)
-  b.put(5,5,'M','w')
-  print(b.as_ascii()+'\n\n')
-  b.apply_move(b.collect_moves(5,5)[13])
-  print(b.as_ascii())
-  print(b._pieces)
+  b.put(2, 2, 'R', 'b')      # xe đen tại (2,2)
+  b.put(2, 5, 'P', 'w')      # chặn tại (2,5)
+  print("\n[CASE 2] Rook (blocked)")
+  print("Expect False:", b.is_square_attacked(2, 7, 'b'))  # bị chặn bởi (2,5)
+  b.clear(2, 5)              # bỏ chặn
+  print("Expect True :", b.is_square_attacked(2, 7, 'b'))  # thông tia → True
