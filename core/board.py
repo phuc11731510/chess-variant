@@ -478,6 +478,6 @@ if __name__ == "__main__":
   b.apply_move(mv)
   
   print("EP sau khi đi:", getattr(b, "en_passant_target"))
-  b.put(3,3,'P','w')
-  print(b.as_ascii())
+  b.put(3,3,'δ','w')
+  print(b.as_ascii()+'\n\n')
   print(b.collect_moves(3,3))

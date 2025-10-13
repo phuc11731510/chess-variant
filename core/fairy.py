@@ -148,105 +148,97 @@ class Sergeant(Piece):
     """Khởi tạo Sergeant với color = 'w' hoặc 'b'."""
     super().__init__("δ", color)
     
+  def _in_bounds(self, board: "Board", i: int, j: int) -> bool:
+    """Trả về True nếu (i,j) nằm trong biên bàn cờ; False nếu ngoài biên.
+    Không ném ngoại lệ. Dùng board.at(...) để tận dụng kiểm tra sẵn có."""
+    try:
+      board.at(i, j)
+      return True
+    except Exception:
+      return False
+    
+  def _safe_at(self, board: "Board", i: int, j: int):
+    """Trả về Piece ở (i,j) nếu trong biên, ngược lại trả về None.
+    Không ném ngoại lệ ngay cả khi ngoài biên."""
+    if not self._in_bounds(board, i, j):
+      return None
+    return board.at(i, j)
+  
+  def _emit_step(self,
+                board: "Board",
+                x: int, y: int,
+                nx: int, ny: int,
+                moves: list["Move"],
+                promo_row: int,
+                promo_syms: list[str],
+                ep) -> None:
+    """Thêm nước đi 1-bước (thẳng/chéo), gồm thường, phong cấp, và en passant.
+    Ghi chú EP: schema dạng danh sách/tuple 2 phần tử: [(midx,midy),(tx,ty)]."""
+    if not self._in_bounds(board, nx, ny):
+      return
+    target = self._safe_at(board, nx, ny)
+    if target is not None and target.color == self.color:
+      return  # chặn đi/ăn quân mình
+
+    # Phong cấp khi chạm hàng phong
+    if nx == promo_row:
+      for cand in promo_syms:
+        moves.append(Move(x, y, nx, ny, self, promotion_to=cand))
+      return
+
+    # En passant an toàn
+    if ep and isinstance(ep, (list, tuple)) and len(ep) == 2:
+      ep_dst, ep_victim = ep[0], ep[1]
+      if isinstance(ep_dst, (list, tuple)) and isinstance(ep_victim, (list, tuple)):
+        if (nx, ny) == (int(ep_dst[0]), int(ep_dst[1])):
+          vx, vy = int(ep_victim[0]), int(ep_victim[1])
+          victim = self._safe_at(board, vx, vy)
+          if victim is not None and victim.color != self.color:
+            moves.append(Move(x, y, nx, ny, self, is_en_passant=True))
+            return
+
+    # Nước đi/ăn thường
+    moves.append(Move(x, y, nx, ny, self))
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
-    Pseudo-legal moves cho Sergeant (δ).
-
-    Quy tắc:
-      - 1 bước: có thể đi THẲNG trước mặt hoặc CHÉO (trái/phải) 1 ô.
-        • Ô đến có thể trống (đi thường) hoặc có đối phương (ăn thường).
-      - 2 bước từ HAI hàng xuất phát (board.pawn_start_rows(side)):
-        • Hướng tiến (dx) + có biến thể CHÉO 2 ô (trái/phải).
-        • YÊU CẦU: cả ô trung gian và ô đích đều trống.
-        • Nước đi gắn cờ is_double_step=True.
-      - En passant (schema mới): board.en_passant_target == ((tx, ty), (cx, cy)).
-        • (tx, ty): ô đích; (cx, cy): tọa độ quân bị bắt sẽ bị xóa khi thực thi.
-        • Generator CHỈ kiểm tra hợp lệ và thêm Move(is_en_passant=True);
-          việc xóa nạn nhân để Board.apply_move xử lý.
-      - Phong cấp: khi chạm hàng phong cấp (board.promotion_row(side)),
-        tạo các nước đi với promotion_to ∈ board.promotion_candidates(side).
-
-    Tham số:
-      board: Board — trạng thái bàn cờ hiện tại (có API at(), promotion_row(), …).
-      x, y: int — tọa độ hiện tại (gốc trên-trái; x tăng xuống, y tăng sang phải).
-
-    Trả về:
-      list[Move]: Danh sách nước đi pseudo-legal (chưa kiểm tra “royal safety”).
-
-    Ghi chú:
-      - Hàm này cố tình “chịu lỗi nhẹ” để Board thiếu API vẫn hoạt động tối thiểu.
-      - Kiểm tra tự chiếu (self-check) và hợp lệ cuối cùng thuộc về lớp Board.
+    Pseudo-legal moves cho Sergeant (δ):
+      - 1 bước: thẳng hoặc chéo (trái/phải).
+      - 2 bước từ HAI hàng xuất phát: thẳng/chéo; ô trung gian & đích đều trống; is_double_step=True.
+      - En passant: ep == [(midx,midy), (tx,ty)] (generator chỉ gắn cờ).
+      - Phong cấp: khi chạm hàng phong cấp (board.promotion_row(...)).
     """
-    
-    moves:list[Move]=[]
-    
-    if self.color=='w':dx=-1
-    else:dx=1
-    
-    if self.color=='w':side="white"
-    else:side="black"
-    
-    start_rows:set[int]=board.pawn_start_rows(side)
-    promo_rows:int=board.promotion_row(side)
-    promo_syms:list[str]=board.promotion_candidates()
-    ep=board.en_passant_target
-    
-    nx=x+dx
-    ny=y
-    try:
-      t=board.at(nx,ny)
-      if t==None or (not t.color==self.color):
-        if nx==promo_rows:
-          for cand in promo_syms:moves.append(Move(x,y,nx,ny,self,promotion_to=cand))
-        elif ep and ep[0]==(nx,ny) and board.at(ep[1][0],ep[1][1]).color!=self.color:
-          moves.append(Move(x,y,nx,ny,self,is_en_passant=True))
-        else:moves.append(Move(x,y,nx,ny,self))
-    except:pass
-    
-    ny=y-1
-    try:
-      t=board.at(nx,ny)
-      if t==None or (not t.color==self.color):
-        if nx==promo_rows:
-          for cand in promo_syms:moves.append(Move(x,y,nx,ny,self,promotion_to=cand))
-        elif ep and ep[0]==(nx,ny) and board.at(ep[1][0],ep[1][1]).color!=self.color:
-          moves.append(Move(x,y,nx,ny,self,is_en_passant=True))
-        else:moves.append(Move(x,y,nx,ny,self))
-    except:pass
-    
-    ny=y+1
-    try:
-      t=board.at(nx,ny)
-      if t==None or (not t.color==self.color):
-        if nx==promo_rows:
-          for cand in promo_syms:moves.append(Move(x,y,nx,ny,self,promotion_to=cand))
-        elif ep and ep[0]==(nx,ny) and board.at(ep[1][0],ep[1][1]).color!=self.color:
-          moves.append(Move(x,y,nx,ny,self,is_en_passant=True))
-        else:moves.append(Move(x,y,nx,ny,self))
-    except:pass
-    
-    nx=x+2*dx
-    ny=y
-    try:
-      t=board.at(nx,ny)
-      if (x in start_rows) and (board.at(x+dx,y)==None) and (t==None):
-        moves.append(Move(x,y,nx,ny,self,is_double_step=True))
-    except:pass
-    
-    ny=y-2
-    try:
-      t=board.at(nx,ny)
-      if (x in start_rows) and (board.at(x+dx,y-1)==None) and (t==None):
-        moves.append(Move(x,y,nx,ny,self,is_double_step=True))
-    except:pass
-      
-    ny=y+2
-    try:
-      t=board.at(nx,ny)
-      if (x in start_rows) and (board.at(x+dx,y+1)==None) and (t==None):
-        moves.append(Move(x,y,nx,ny,self,is_double_step=True))
-    except:pass
-    
+    moves: list[Move] = []
+
+    dx = -1 if self.color == 'w' else 1
+    side = 'white' if self.color == 'w' else 'black'
+
+    start_rows: set[int] = board.pawn_start_rows(side)
+    promo_row: int = board.promotion_row(side)
+    promo_syms: list[str] = board.promotion_candidates()
+    ep = board.en_passant_target
+
+    # 1-bước: thẳng, chéo trái, chéo phải
+    self._emit_step(board, x, y, x + dx, y, moves, promo_row, promo_syms, ep)
+    self._emit_step(board, x, y, x + dx, y - 1, moves, promo_row, promo_syms, ep)
+    self._emit_step(board, x, y, x + dx, y + 1, moves, promo_row, promo_syms, ep)
+
+    # 2-bước (chỉ nếu đang ở hàng xuất phát)
+    nx2 = x + 2 * dx
+    if x in start_rows:
+      # thẳng 2
+      if (self._in_bounds(board, x + dx, y) and self._safe_at(board, x + dx, y) is None and
+          self._in_bounds(board, nx2, y) and self._safe_at(board, nx2, y) is None):
+        moves.append(Move(x, y, nx2, y, self, is_double_step=True))
+      # chéo trái 2
+      if (self._in_bounds(board, x + dx, y - 1) and self._safe_at(board, x + dx, y - 1) is None and
+          self._in_bounds(board, nx2, y - 2) and self._safe_at(board, nx2, y - 2) is None):
+        moves.append(Move(x, y, nx2, y - 2, self, is_double_step=True))
+      # chéo phải 2
+      if (self._in_bounds(board, x + dx, y + 1) and self._safe_at(board, x + dx, y + 1) is None and
+          self._in_bounds(board, nx2, y + 2) and self._safe_at(board, nx2, y + 2) is None):
+        moves.append(Move(x, y, nx2, y + 2, self, is_double_step=True))
+
     return moves
     
 class Archbishop(Piece):
