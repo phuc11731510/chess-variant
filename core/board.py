@@ -38,12 +38,14 @@ class Board:
 
   Lưu ý: grid[x][y] (hàng = x, cột = y).
   """
-  __slots__ = ("w", "h", "grid", "_royal_pos", "en_passant_target")
+  __slots__ = ("w", "h", "grid", "_royal_pos", "en_passant_target",
+               "_pieces")
   w: int
   h: int
   grid: List[List[Square]]  # grid[x][y]
   _roayal_pos: dict[str, set[tuple[int,int]]]
   en_passant_target: list[tuple[int, int]] | None
+  _pieces: dict[str,list[tuple[Piece,int,int]]]
 
   def __init__(self, w: int = 10, h: int = 10) -> None:
     """Tạo bàn rỗng w×h (mặc định 10×10), mỗi ô là Square(None)."""
@@ -52,7 +54,25 @@ class Board:
     self.grid = [[Square() for _ in range(w)] for _ in range(h)]
     self._royal_pos = {"w": set(), "b": set()}
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
-    
+    self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
+  
+  def _index_remove(self, x: int, y: int) -> None:
+    """Gỡ quân tại (x,y) khỏi chỉ mục (nếu đang có). An toàn với ô trống."""
+    p = self.at(x, y)
+    if p is None:
+      return
+    bucket = self._pieces[p.color]
+    for k, (q, i, j) in enumerate(bucket):
+      if q is p and i == x and j == y:
+        bucket.pop(k)
+        break
+  
+  def _index_add(self, x: int, y: int) -> None:
+    """Đưa quân tại (x,y) vào chỉ mục theo màu. Bỏ qua nếu ô trống."""
+    p = self.at(x, y)
+    if p is not None:
+      self._pieces[p.color].append((p, x, y))
+  
   def compute_en_passant_target(self, mv: "Move", piece: "Piece") -> list[tuple[int, int]] | None:
     """
     Tính EP target sau một nước double-step (Pawn/Sergeant).
@@ -103,8 +123,13 @@ class Board:
       raise ValueError(f"No piece at source ({mv.fx},{mv.fy}).")
 
     if getattr(mv, "piece", None) is not None and mv.piece is not piece:
-      # tuỳ dự án có thể raise để siết chặt
+      # Có thể raise để siết chặt, hiện tạm bỏ qua
       pass
+
+    # === CẬP NHẬT CHỈ MỤC: chuẩn bị gỡ các mục liên quan trước khi sửa lưới ===
+    # Gỡ nguồn
+    if hasattr(self, "_index_remove"):
+      self._index_remove(mv.fx, mv.fy)
 
     # 1) EN PASSANT: xoá nạn nhân trước khi di chuyển
     if mv.is_en_passant:
@@ -117,13 +142,19 @@ class Board:
       victim = self.at(cx, cy)
       if victim is None or victim.color == piece.color:
         raise ValueError("Invalid EN PASSANT victim square.")
-      self.clear(cx, cy)  # xoá nạn nhân EP trước
+      # Gỡ nạn nhân EP khỏi index trước khi xóa
+      if hasattr(self, "_index_remove"):
+        self._index_remove(cx, cy)
+      self.clear(cx, cy)
 
     # 2) Ăn thường (khi không phải EP)
     dst_piece = self.at(mv.tx, mv.ty)
     if dst_piece is not None and dst_piece.color == piece.color:
       raise ValueError("Destination occupied by same-color piece.")
     if dst_piece is not None and not mv.is_en_passant:
+      # Gỡ mục index của quân bị ăn ở đích trước khi xóa
+      if hasattr(self, "_index_remove"):
+        self._index_remove(mv.tx, mv.ty)
       self.clear(mv.tx, mv.ty)
 
     # 3) Di chuyển quân (nguồn -> đích) mà KHÔNG thay thế ô (Square)
@@ -132,13 +163,12 @@ class Board:
     self.clear(mv.fx, mv.fy)
     dst_cell = self.grid[mv.tx][mv.ty]
     try:
-      # Trường hợp grid là list[list[Square]]
       dst_cell.piece = piece
     except AttributeError:
-      # Fallback nếu grid chứa trực tiếp Piece/None (không mong muốn)
       self.grid[mv.tx][mv.ty] = piece
 
     # 4) Promotion (nếu có): thay quân trong ô đích
+    promoted = None
     if mv.promotion_to:
       try:
         from .piece_factory import create
@@ -149,7 +179,11 @@ class Board:
           self.grid[mv.tx][mv.ty] = promoted
       except Exception:
         # Nếu promote lỗi, giữ nguyên quân hiện tại
-        pass
+        promoted = None
+
+    # Sau khi đặt xong (đã tính cả promotion), bổ sung index cho ô đích
+    if hasattr(self, "_index_add"):
+      self._index_add(mv.tx, mv.ty)
 
     # 5) Reset EP mặc định; nếu double-step thì set EP mới (schema: list-of-tuples)
     self.en_passant_target = None
@@ -157,11 +191,10 @@ class Board:
       compute = getattr(self, "compute_en_passant_target", None)
       if callable(compute):
         try:
-          ep_pair = compute(mv, piece)  # kỳ vọng: [(tx,ty), (cx,cy)] hoặc None
+          ep_pair = compute(mv, piece)
           if ep_pair and isinstance(ep_pair, list) and len(ep_pair) == 2:
             self.en_passant_target = ep_pair
         except Exception:
-          # Bỏ qua lỗi set EP để nước đi vẫn hoàn tất
           pass
 
     return
@@ -376,6 +409,7 @@ class Board:
     Đặt/ghi-đè quân tại (x,y):
       - Kiểm tra biên.
       - Nếu ô đang có quân royal → loại khỏi cache trước.
+      - Cập nhật chỉ mục quân theo màu (_pieces): gỡ entry cũ, thêm entry mới.
       - Tạo quân bằng factory rồi đặt vào ô.
       - Nếu quân mới là royal → thêm vào cache.
     Raises:
@@ -383,10 +417,13 @@ class Board:
     """
     self._check_bounds(x, y)
 
-    # Nếu đang có quân (đặc biệt là royal) thì gỡ khỏi cache trước khi ghi đè
+    # Nếu đang có quân (đặc biệt là royal) thì gỡ khỏi cache & chỉ mục trước khi ghi đè
     old = self.at(x, y)
-    if old is not None and getattr(old, "is_royal", False):
-      self._royal_pos[old.color].discard((x, y))
+    if old is not None:
+      if getattr(old, "is_royal", False):
+        self._royal_pos[old.color].discard((x, y))
+      # Giữ chỉ mục đúng
+      self._index_remove(x, y)
 
     # Tạo quân mới
     try:
@@ -396,8 +433,11 @@ class Board:
         f"Không tạo được quân tại (x={x}, y={y}) với kind='{kind}', color='{color}'. Lỗi gốc: {e}"
       ) from e
 
-    # Đặt quân và cập nhật cache nếu là royal
+    # Đặt quân
     self.grid[x][y].set_piece(piece)
+
+    # Cập nhật chỉ mục và cache royal cho quân mới
+    self._index_add(x, y)
     if getattr(piece, "is_royal", False):
       self._royal_pos[piece.color].add((x, y))
 
@@ -414,17 +454,25 @@ class Board:
   
   def clear(self, x: int, y: int) -> None:
     """
-    Xóa quân tại (x,y) → None:
+    Xóa quân tại (x,y) → None và cập nhật chỉ mục/index:
       - Kiểm tra biên.
-      - Nếu ô có quân royal → loại khỏi cache.
-      - Đặt None vào ô (idempotent nếu sẵn trống).
+      - Nếu ô có quân royal → loại khỏi cache self._royal_pos.
+      - Gỡ quân khỏi chỉ mục màu self._pieces[...] (nếu đang có).
+      - Đặt None vào ô (idempotent nếu đã trống).
     """
     self._check_bounds(x, y)
 
     p = self.at(x, y)
-    if p is not None and getattr(p, "is_royal", False):
+    if p is None:
+      return  # idempotent: không có gì để cập nhật
+
+    if getattr(p, "is_royal", False):
       self._royal_pos[p.color].discard((x, y))
 
+    # Gỡ khỏi index trước khi mutate ô
+    self._index_remove(x, y)
+
+    # Xóa quân tại ô
     self.grid[x][y].set_piece(None)
   
   def put_alg(self, file: str, rank: int, kind: str, color: str) -> None:
@@ -472,12 +520,8 @@ class Board:
 
 if __name__ == "__main__":
   b = Board(10, 10)
-  b.put(1, 4, 'P', 'b')
-  move_list=b.collect_moves(1,4)
-  mv=move_list[1]
-  b.apply_move(mv)
-  
-  print("EP sau khi đi:", getattr(b, "en_passant_target"))
-  b.put(3,3,'δ','w')
+  b.put(5,5,'M','w')
   print(b.as_ascii()+'\n\n')
-  print(b.collect_moves(3,3))
+  b.apply_move(b.collect_moves(5,5)[13])
+  print(b.as_ascii())
+  print(b._pieces)

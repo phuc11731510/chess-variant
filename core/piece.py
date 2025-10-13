@@ -43,6 +43,32 @@ class Piece:
     """Return True if the piece is royal."""
     return self._is_royal
   
+  def can_attack(self, board: "Board", sx: int, sy: int, tx: int, ty: int) -> bool:
+    """
+    Truy vấn nhanh: quân hiện tại (ở (sx, sy)) có *khống chế/tấn công* ô (tx, ty) không?
+
+    Ngữ nghĩa:
+      - Trả về True nếu theo quy tắc *tấn công/ăn* của quân này, ô (tx, ty) là mục tiêu hợp lệ
+        trong bối cảnh bàn cờ hiện tại. Không xét self-check, không xét lượt đi.
+      - BỎ QUA en passant (EP không dùng để "chiếu" vua).
+      - Phong cấp không liên quan tới truy vấn tấn công.
+
+    Thiết kế:
+      - Mặc định dùng fallback: gọi generate_moves(...) rồi kiểm tra có move tới (tx, ty) không,
+        đồng thời loại bỏ các nước is_en_passant.
+      - Khuyến khích các lớp con override để tối ưu (O(1) cho Knight/King/General/Sergeant 1 ô,
+        kiểm tia cho Rook/Bishop/Queen, v.v.). Điều này tránh phải sinh list Move.
+
+    Tham số:
+      board: Board  – trạng thái bàn cờ.
+      sx, sy: int   – tọa độ nguồn của quân này.
+      tx, ty: int   – tọa độ đích cần kiểm tra bị khống chế hay không.
+
+    Trả về:
+      bool: True nếu (tx, ty) bị quân này khống chế; ngược lại False.
+    """
+    pass
+  
   def generate_moves(self, board: "Board", x: int, y: int) -> list[tuple[int, int]]:
     """
     Trả về danh sách nước đi pseudo-legal cho quân này tại (x,y).
