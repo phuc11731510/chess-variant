@@ -52,16 +52,6 @@ class Board:
     self.grid = [[Square() for _ in range(w)] for _ in range(h)]
     self._royal_pos = {"w": set(), "b": set()}
     self.en_passant_target = []   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
-    
-  def _mv_src(self, mv) -> tuple[int, int]:
-    """
-    Trích tọa độ nguồn của Move theo kiểu duck-typing.
-    Thử lần lượt: (x,y), (sx,sy), (from_x,from_y), (x1,y1).
-    """
-    for a, b in (('x','y'), ('sx','sy'), ('from_x','from_y'), ('x1','y1')):
-      if hasattr(mv, a) and hasattr(mv, b):
-        return getattr(mv, a), getattr(mv, b)
-    raise AttributeError("Move source coordinates not found.")
       
   def apply_move(self, mv: "Move") -> None:
     """
