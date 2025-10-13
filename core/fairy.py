@@ -188,7 +188,7 @@ class Sergeant(Piece):
     
     start_rows:set[int]=board.pawn_start_rows(side)
     promo_rows:int=board.promotion_row(side)
-    promo_syms:list[str]=board.promotion_candidates(side)
+    promo_syms:list[str]=board.promotion_candidates()
     ep=board.en_passant_target
     
     nx=x+dx

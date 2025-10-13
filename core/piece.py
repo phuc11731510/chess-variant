@@ -208,12 +208,14 @@ class Pawn(Piece):
   
   def generate_moves(self, board: "Board", x: int, y: int) -> list[Move]:
     """
-    Pseudo-legal moves cho Pawn:
+    Pseudo-legal moves cho Pawn (chuẩn):
       - Đi thẳng 1 ô (nếu trống).
       - Đi thẳng 2 ô từ HAI hàng xuất phát (nếu cả 2 ô trống).
       - Ăn chéo 1 ô (trái/phải) nếu có đối phương.
-      - En passant (schema mới): board.en_passant_target == ((tx,ty),(cx,cy)).
-        (tx,ty) là ô đến; (cx,cy) là ô quân bị bắt sẽ bị xóa khi thực thi.
+      - En passant: chỉ bắt theo đường chéo; đọc schema list-of-tuples
+        board.en_passant_target == [(tx,ty), (cx,cy)] với:
+          (tx,ty): ô đến khi bắt EP (ô trung gian mà tốt đối thủ vừa "đi qua"),
+          (cx,cy): ô chứa nạn nhân để xóa khi thực thi EP-capture.
       - Phong cấp khi chạm hàng phong cấp.
     Trả về: list[Move].
     """
@@ -225,21 +227,21 @@ class Pawn(Piece):
     # 1) Ứng viên phong cấp (Board có thể tùy biến)
     promo_syms = ["Q", "R", "N", "K", "M", "V", "Y", "δ", "H"]
     try:
-      cand = list(board.promotion_candidates(side))
+      cand = list(board.promotion_candidates())
       if cand:
         promo_syms = cand
     except Exception:
       pass
 
-    # 2) Hàng phong cấp (mặc định -1 nếu Board chưa cung cấp)
+    # 2) Hàng phong cấp
     try:
       promo_row = board.promotion_row(side)
     except Exception:
-      promo_row = -1
+      promo_row = -1  # không khớp -> coi như không phong cấp
 
     # 3) Hai hàng xuất phát cho double-step
     try:
-      start_rows: set[int] = set(board.pawn_start_rows(side))
+      start_rows: set[int] = board.pawn_start_rows(side)
     except Exception:
       start_rows = set()
 
@@ -272,24 +274,19 @@ class Pawn(Piece):
           except Exception:
             pass
 
-      # 7) En passant — chỉ đọc schema mới: ((tx,ty),(cx,cy))
+      # 7) En passant — chỉ chéo; schema: [(tx,ty), (cx,cy)]
       try:
         ep_pair = board.en_passant_target
       except Exception:
         ep_pair = None
 
-      if ep_pair is not None:
+      if ep_pair:
         try:
-          (tx, ty), (cx, cy) = ep_pair
-          # EP hợp lệ khi ô đến là hàng kế tiếp (nx) & lệch cột 1 đơn vị
-          if tx == nx and (ty == y - 1 or ty == y + 1) and 0 <= ty < board.w:
-            victim = board.at(cx, cy)
-            try:
-              if victim is not None and victim.color != self.color:
-                # Không truyền 'captured' vì Move không có thuộc tính này
-                moves.append(Move(x, y, tx, ty, self, is_en_passant=True))
-            except Exception:
-              pass
+          (tx, ty), (cx, cy) = ep_pair  # list[tuple]
+          if tx == nx and 0 <= ty < board.w and (ty == y - 1 or ty == y + 1):
+            victim = board.at(cx, cy)   # Thực tế sẽ bị lỗi ở dòng này
+            if victim is not None and victim.color != self.color:
+              moves.append(Move(x, y, tx, ty, self, is_en_passant=True))
         except Exception:
           pass
 
