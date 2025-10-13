@@ -68,33 +68,28 @@ class Board:
     Thực thi một pseudo-legal Move trên bàn cờ.
 
     Hỗ trợ:
-      - Nước đi thường & ăn thường (ghi đè ô đích nếu là đối phương).
-      - En passant:
-        • Khi Move.is_en_passant=True: đọc self.en_passant_target == ((tx,ty),(cx,cy)),
-          yêu cầu (tx,ty) == (mv.nx,mv.ny); xóa quân tại (cx,cy) rồi mới di chuyển.
-        • Sau khi thực thi: reset EP về None.
-      - Set/Reset EP:
-        • Mặc định reset: self.en_passant_target = None.
-        • Nếu mv.is_double_step=True (Pawn/Sergeant):
-          gọi hook self.compute_en_passant_target(mv, piece) (nếu có) để nhận
-          ((tx,ty),(cx,cy)); hợp lệ thì gán.
+      - Nước đi thường & ăn thường.
+      - En passant: đọc self.en_passant_target == ((tx,ty),(cx,cy)),
+        yêu cầu (tx,ty) == (mv.tx,mv.ty); xóa quân tại (cx,cy) rồi di chuyển.
+      - Set/Reset EP: mặc định reset; nếu mv.is_double_step thì gọi
+        compute_en_passant_target(mv, piece) (nếu có) để gán EP mới.
 
     Ghi chú:
       - Không kiểm tra “royal safety”.
       - Promotion (mv.promotion_to) xử lý ở cuối (nếu có).
     """
     # 0) Lấy quân xuất phát
-    piece = self.at(mv.x, mv.y)
+    piece = self.at(mv.fx, mv.fy)
     if piece is None:
-      raise ValueError(f"No piece at source ({mv.x},{mv.y}).")
+      raise ValueError(f"No piece at source ({mv.fx},{mv.fy}).")
 
     # 1) Nếu là en passant: xóa nạn nhân trước khi di chuyển
-    if getattr(mv, "is_en_passant", False):
+    if mv.is_en_passant:
       ep = getattr(self, "en_passant_target", None)
       if not ep:
         raise ValueError("EN PASSANT move but no en_passant_target set.")
-      (tx, ty), (cx, cy) = ep
-      if (tx, ty) != (mv.nx, mv.ny):
+      (etx, ety), (cx, cy) = ep
+      if (etx, ety) != (mv.tx, mv.ty):
         raise ValueError("EN PASSANT destination mismatch.")
       victim = self.at(cx, cy)
       if victim is None or victim.color == piece.color:
@@ -102,34 +97,31 @@ class Board:
       self.clear(cx, cy)  # xóa nạn nhân EP
 
     # 2) Ăn thường: nếu ô đích có quân đối phương thì xóa (không áp dụng cho EP)
-    dst = self.at(mv.nx, mv.ny)
+    dst = self.at(mv.tx, mv.ty)
     if dst is not None and dst.color == piece.color:
       raise ValueError("Destination occupied by same-color piece.")
-    if dst is not None and not getattr(mv, "is_en_passant", False):
-      self.clear(mv.nx, mv.ny)
+    if dst is not None and not mv.is_en_passant:
+      self.clear(mv.tx, mv.ty)
 
     # 3) Di chuyển quân (nguồn -> đích)
-    self.clear(mv.x, mv.y)
-    self._check_bounds(mv.nx, mv.ny)
-    self._grid[mv.nx][mv.ny] = piece
+    self.clear(mv.fx, mv.fy)
+    self._check_bounds(mv.tx, mv.ty)
+    self._grid[mv.tx][mv.ty] = piece
 
     # 4) Promotion (nếu có)
-    promo_to = getattr(mv, "promotion_to", None)
-    if promo_to:
+    if mv.promotion_to:
       try:
         from .piece_factory import create
-        newp = create(promo_to, piece.color)
-        self._grid[mv.nx][mv.ny] = newp
+        newp = create(mv.promotion_to, piece.color)
+        self._grid[mv.tx][mv.ty] = newp
       except Exception:
         # Không promote được thì giữ nguyên quân hiện tại
         pass
 
     # 5) Set/Reset EP
-    # Mặc định: reset
-    self.en_passant_target = None
+    self.en_passant_target = None  # reset mặc định
 
-    # Nếu double-step: gọi hook để tính EP target theo biến thể của bạn
-    if getattr(mv, "is_double_step", False):
+    if mv.is_double_step:
       compute = getattr(self, "compute_en_passant_target", None)
       if callable(compute):
         try:
@@ -137,7 +129,6 @@ class Board:
           if ep_pair and isinstance(ep_pair, tuple) and len(ep_pair) == 2:
             self.en_passant_target = ep_pair
         except Exception:
-          # Không bật EP nếu hook lỗi
           pass
 
     return
