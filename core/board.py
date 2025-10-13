@@ -53,27 +53,31 @@ class Board:
     self._royal_pos = {"w": set(), "b": set()}
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     
-  def compute_en_passant_target(self, mv: "Move", piece: "Piece"):
+  def compute_en_passant_target(self, mv: "Move", piece: "Piece") -> list[tuple[int, int]] | None:
     """
-    Tính EP target sau một nước double-step.
+    Tính EP target sau một nước double-step (Pawn/Sergeant).
 
-    Trả về:
-      ((tx_target, ty_target), (cx, cy)) theo schema:
+    Trả về (schema dùng *list of tuple*):
+      [(tx_target, ty_target), (cx, cy)], trong đó:
         - (tx_target, ty_target): ô mà quân đối phương sẽ "đi đến" khi bắt EP
-                                  (chính là ô trung gian mà tốt đã "đi qua").
+                                  (chính là ô trung gian mà quân vừa "đi qua").
         - (cx, cy): ô chứa nạn nhân để xóa khi thực thi EP-capture
-                    (chính là ô đích của nước double-step hiện tại).
+                    (chính là ô đích hiện tại của nước double-step).
 
-    Yêu cầu: mv.is_double_step == True. Không kiểm tra royal/check tại đây.
+    Yêu cầu:
+      - mv.is_double_step == True (giả định đã do generator đảm bảo).
+      - Không kiểm tra royal/check tại đây.
     """
     if not getattr(mv, "is_double_step", False):
       return None
-    # Ô trung gian trên trục dọc giữa nguồn và đích (đường thẳng theo cột)
+
+    # Ô trung gian giữa nguồn và đích (bao quát cả thẳng và chéo 2 ô)
     midx = (mv.fx + mv.tx) // 2
-    midy = mv.ty
-    # Nạn nhân là quân vừa đứng ở ô đích của double-step
+    midy = (mv.fy + mv.ty) // 2
+
+    # Nạn nhân là quân vừa đứng ở ô đích của nước double-step
     return [(midx, midy), (mv.tx, mv.ty)]
-      
+
   def apply_move(self, mv: "Move") -> None:
     """
     Thực thi một pseudo-legal Move trên bàn cờ.
@@ -470,4 +474,6 @@ if __name__ == "__main__":
   print("EP sau khi đi:", getattr(b, "en_passant_target"))
   
   print(b.as_ascii())
-  print(b.en_passant_target)
+  b.put(3,3,'P','w')
+  print(b.as_ascii())
+  print(b.collect_moves(3,3))
