@@ -56,19 +56,62 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def result_if_over(self) -> str | None:
+    """
+    Trả về kết quả ván cờ nếu đã kết thúc, ngược lại None.
+    Quy ước:
+      - '1-0'     : Trắng thắng (đen bị chiếu bí).
+      - '0-1'     : Đen thắng (trắng bị chiếu bí).
+      - '1/2-1/2' : Hòa (stalemate ở bất kỳ bên nào).
+    Ghi chú:
+      - Dựa trên is_checkmated/is_stalemated (đều đã dùng has_any_legal_move).
+      - Các điều kiện hòa khác sẽ bổ sung sau.
+    """
+    if self.is_checkmated('w'):
+      return '0-1'
+    if self.is_checkmated('b'):
+      return '1-0'
+    if self.is_stalemated('w') or self.is_stalemated('b'):
+      return '1/2-1/2'
+    return None
+  
+  def has_any_legal_move(self, color: str) -> bool:
+    """
+    Trả về True nếu tồn tại ÍT NHẤT MỘT nước đi hợp lệ cho bên `color`.
+    Tối ưu: duyệt theo index self._pieces[color] và thoát NGAY khi gặp một nước hợp lệ,
+    không tạo list đầy đủ như legal_moves_for(...).
+    Ghi chú:
+      - Dựa vào causes_self_check(mv) để lọc hợp lệ; không xây tập kết quả.
+      - An toàn để dùng trong is_checkmated/is_stalemated/result_if_over.
+    Độ phức tạp: O(K) với K = số nước phải thử cho tới khi gặp nước hợp lệ đầu tiên (thường nhỏ).
+    """
+    my_pos = self._pieces.get(color) or []
+    for item in list(my_pos):
+      p, x, y = item  # index dạng (piece, x, y)
+      if self.at(x, y) is not p or p.color != color:
+        continue
+      for mv in self.collect_moves(x, y):
+        if not self.causes_self_check(mv):
+          return True
+    return False
+  
+  def is_stalemated(self, color: str) -> bool:
+    """
+    Trả về True nếu bên `color` KHÔNG bị chiếu và KHÔNG còn bất kỳ nước đi hợp lệ nào.
+    Tối ưu: dùng has_any_legal_move(color) để early-exit, tránh tạo list lớn.
+    """
+    if self.is_in_check(color):
+      return False
+    return not self.has_any_legal_move(color)
+  
   def is_checkmated(self, color: str) -> bool:
     """
-    Trả về True nếu bên `color` đang bị chiếu và KHÔNG còn nước đi hợp lệ nào.
-    Định nghĩa:
-      - Mate khi: is_in_check(color) == True và len(legal_moves_for(color)) == 0.
-    Ghi chú:
-      - Giả định legal_moves_for(...) đã lọc tự-chiếu chính xác (EP, promotion, v.v.).
-      - Dùng cho phán định kết thúc ván, UI thông báo chiếu bí, và kiểm thử perft.
-    Độ phức tạp: O(M·C) với M = số pseudo-moves sau cắt tỉa, C = chi phí causes_self_check.
+    Trả về True nếu bên `color` đang bị chiếu và KHÔNG còn bất kỳ nước đi hợp lệ nào.
+    Tối ưu: dùng has_any_legal_move(color) để early-exit, tránh tạo list lớn.
     """
     if not self.is_in_check(color):
       return False
-    return len(self.legal_moves_for(color)) == 0
+    return not self.has_any_legal_move(color)
   
   def legal_moves_for(self, color: str) -> "list[Move]":
     """
@@ -726,22 +769,28 @@ class Board:
     """
     Xóa quân tại (x,y) → None và cập nhật chỉ mục/index:
       - Kiểm tra biên.
-      - Nếu ô có quân royal → loại khỏi cache self._royal_pos.
+      - Nếu ô có quân royal → loại khỏi cache self._royal_pos (an toàn với tuple/set).
       - Gỡ quân khỏi chỉ mục màu self._pieces[...] (nếu đang có).
       - Đặt None vào ô (idempotent nếu đã trống).
     """
     self._check_bounds(x, y)
-
     p = self.at(x, y)
     if p is None:
-      return  # idempotent: không có gì để cập nhật
+      return  # idempotent
 
+    # --- Chuẩn hoá cache royal về set trước khi thao tác ---
     if getattr(p, "is_royal", False):
+      bucket = self._royal_pos.get(p.color)
+      # tuple (rx,ry) -> set{(rx,ry)}; các kiểu khác -> set(...)
+      if isinstance(bucket, tuple) and len(bucket) == 2:
+        self._royal_pos[p.color] = {bucket}
+      elif not isinstance(bucket, set):
+        self._royal_pos[p.color] = set(bucket or [])
+      # Bây giờ chắc chắn là set:
       self._royal_pos[p.color].discard((x, y))
 
     # Gỡ khỏi index trước khi mutate ô
     self._index_remove(x, y)
-
     # Xóa quân tại ô
     self.grid[x][y].set_piece(None)
   
@@ -816,4 +865,4 @@ if __name__ == "__main__":
   b2.set_royal(0,0)
   print("In-check (w) #2:", b2.is_in_check('w'))
   print("Legal moves (w) #2:", len(b2.legal_moves_for('w')))
-  # print("Is checkmated (w) #2:", b2.is_checkmated('w'))
+  print("Is checkmated (w) #2:", b2.is_checkmated('w'))
