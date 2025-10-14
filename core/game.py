@@ -9,6 +9,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.board import Board
 from core.move import Move
 
+def position_key(board: "Board", turn: str) -> str:
+  """
+  Tạo khóa vị thế gọn & nhanh cho threefold.
+  Thành phần: bên sắp đi + toàn bộ quân (kind,color,royal,x,y) + quyền EP.
+  - Ưu tiên O(P) đọc từ board._pieces nếu có; fallback quét H×W.
+  - EP-rights: lấy ô đích bắt EP (cap_x, cap_y) nếu hợp lệ; else "~".
+  """
+  items = []
+  idx = getattr(board, "_pieces", None)
+  if idx:
+    for entry in idx:
+      try:
+        p, x, y = entry
+      except Exception:
+        x, y = entry  # legacy: set[(x,y)]
+        p = board.at(x, y)
+      if p is None:
+        continue
+      items.append((p.kind, p.color, bool(getattr(p, "_is_royal", False)), int(x), int(y)))
+  else:
+    H, W = getattr(board, "h", 10), getattr(board, "w", 10)
+    for x in range(H):
+      for y in range(W):
+        p = board.at(x, y)
+        if p:
+          items.append((p.kind, p.color, bool(getattr(p, "_is_royal", False)), x, y))
+  items.sort(key=lambda t: (t[1], t[0], t[3], t[4]))  # color, kind, x, y
+
+  ep = getattr(board, "en_passant_target", None)
+  ep_str = "~"
+  if ep and isinstance(ep, (list, tuple)) and len(ep) == 2 and isinstance(ep[0], (list, tuple)) and len(ep[0]) == 2:
+    ep_str = f"{int(ep[0][0])},{int(ep[0][1])}"
+
+  parts = ["t=", turn, "|p=", ";".join(f"{k},{c},{1 if r else 0},{x},{y}" for k, c, r, x, y in items), "|ep=", ep_str]
+  return "".join(parts)
 
 class Game:
   """
@@ -44,14 +79,6 @@ class Game:
 if __name__ == "__main__":
   # Demo tối giản: EP đích trống nhưng vẫn tính là bắt → halfmove_clock reset
   b = Board(10, 10)
-  b.put(3, 3, "P", "w")      # trắng
-  b.put(1, 4, "P", "b")      # đen
+  b.setup_from_layout()
   g = Game(b, turn="b")
-  print(b)
-  # # Đen double-step để mở EP (giả sử luật cho phép):
-  g.play(Move(1, 4, 3, 4, b.at(1, 4), is_double_step=True))
-  print(b)
-  # Trắng bắt EP: đích (2,4) trống nhưng là capture:
-  g.play(Move(3, 3, 2, 4, b.at(3, 3), is_en_passant=True))
-  print("halfmove_clock:", g.halfmove_clock, "turn:", g.turn)
-  print(b)
+  print(position_key(b,'w'))
