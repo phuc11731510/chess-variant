@@ -767,31 +767,35 @@ class Board:
   
   def clear(self, x: int, y: int) -> None:
     """
-    Xóa quân tại (x,y) → None và cập nhật chỉ mục/index:
-      - Kiểm tra biên.
-      - Nếu ô có quân royal → loại khỏi cache self._royal_pos (an toàn với tuple/set).
-      - Gỡ quân khỏi chỉ mục màu self._pieces[...] (nếu đang có).
-      - Đặt None vào ô (idempotent nếu đã trống).
+    Xoá quân khỏi ô (x,y). Đồng thời:
+      - Cập nhật chỉ mục tự duy trì (_pieces index).
+      - Cập nhật royal-cache: nếu quân bị xoá là 'royal' thì loại (x,y) khỏi cache.
+    An toàn với các kiểu lưu trữ tạm thời của _royal_pos[color] (tuple/set/list/None).
     """
     self._check_bounds(x, y)
     p = self.at(x, y)
     if p is None:
-      return  # idempotent
+      return
 
-    # --- Chuẩn hoá cache royal về set trước khi thao tác ---
+    # Cập nhật royal-cache nếu cần
     if getattr(p, "is_royal", False):
       bucket = self._royal_pos.get(p.color)
-      # tuple (rx,ry) -> set{(rx,ry)}; các kiểu khác -> set(...)
+      # Chuẩn hoá bucket về set để thao tác đồng nhất
       if isinstance(bucket, tuple) and len(bucket) == 2:
-        self._royal_pos[p.color] = {bucket}
+        s = {bucket}
+        self._royal_pos[p.color] = s
+      elif bucket is None:
+        s = set()
+        self._royal_pos[p.color] = s
       elif not isinstance(bucket, set):
-        self._royal_pos[p.color] = set(bucket or [])
-      # Bây giờ chắc chắn là set:
-      self._royal_pos[p.color].discard((x, y))
+        s = set(bucket)
+        self._royal_pos[p.color] = s
+      else:
+        s = bucket
+      s.discard((x, y))
 
-    # Gỡ khỏi index trước khi mutate ô
+    # Cập nhật index + xoá quân trên lưới
     self._index_remove(x, y)
-    # Xóa quân tại ô
     self.grid[x][y].set_piece(None)
   
   def put_alg(self, file: str, rank: int, kind: str, color: str) -> None:
