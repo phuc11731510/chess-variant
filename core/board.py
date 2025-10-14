@@ -56,6 +56,20 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def is_checkmated(self, color: str) -> bool:
+    """
+    Trả về True nếu bên `color` đang bị chiếu và KHÔNG còn nước đi hợp lệ nào.
+    Định nghĩa:
+      - Mate khi: is_in_check(color) == True và len(legal_moves_for(color)) == 0.
+    Ghi chú:
+      - Giả định legal_moves_for(...) đã lọc tự-chiếu chính xác (EP, promotion, v.v.).
+      - Dùng cho phán định kết thúc ván, UI thông báo chiếu bí, và kiểm thử perft.
+    Độ phức tạp: O(M·C) với M = số pseudo-moves sau cắt tỉa, C = chi phí causes_self_check.
+    """
+    if not self.is_in_check(color):
+      return False
+    return len(self.legal_moves_for(color)) == 0
+  
   def legal_moves_for(self, color: str) -> "list[Move]":
     """
     Trả về danh sách nước đi hợp lệ cho bên `color` với cắt tỉa theo trạng thái chiếu.
@@ -782,28 +796,26 @@ class Board:
       raise IndexError(f"out of board bounds: (x={x}, y={y})")
 
 if __name__ == "__main__":
-  # --- Smoke test: causes_self_check trên tình huống 'gim' ---
-  print("\n[Smoke] causes_self_check với thế 'gim'...")
-  b = Board(10, 10)
+  # --- Mock test: checkmate vs non-mate ---
+  print("\n[MockTest] Checkmate & Non-mate smoke test")
 
-  # Đặt quân: vua trắng tại (5,5), xe trắng chắn tại (5,4), xe đen bắn ngang từ (5,0)
-  b.put(5, 5, 'K', 'w'); b.set_royal(5, 5)
-  b.put(5, 4, 'R', 'w')
-  b.put(5, 0, 'R', 'b')
+  b = Board(10, 10)  # bảng trống nếu không gọi setup_from_layout()
+  # TH1: Mate đơn giản
+  # Vua trắng ở góc (0,0); Hậu đen (1,1) chiếu; Vua đen (2,2) bảo vệ ô (1,1)
+  b.put(0, 0, 'K', 'w')
+  b.put(1, 1, 'Q', 'b')
+  b.put(2, 2, 'K', 'b')
+  b.set_royal(0,0)
   print(b.as_ascii())
+  print("In-check (w):", b.is_in_check('w'))
+  print("Legal moves (w):", len(b.legal_moves_for('w')))
+  # print("Is checkmated (w):", b.is_checkmated('w'))
 
-  # Sinh pseudo-moves cho xe trắng đang 'gim'
-  pseudo = b.collect_moves(5, 4)
-
-  # Lọc bằng causes_self_check
-  bad = [m for m in pseudo if b.causes_self_check(m)]     # các nước làm lộ chiếu (KHÔNG hợp lệ)
-  good = [m for m in pseudo if not b.causes_self_check(m)]  # các nước vẫn che/không lộ vua
-  print("Tổng pseudo:", len(pseudo))
-  print("Hợp lệ (không tự chiếu):", len(good))
-  print("Không hợp lệ (tự chiếu):", len(bad))
-
-  # In nhanh kết quả để quan sát
-  if good:
-    print("  -> Ví dụ hợp lệ:", good[0])
-  if bad:
-    print("  -> Ví dụ không hợp lệ:", bad[0])
+  # # TH2: Không còn là mate (đưa Vua đen ra xa để K trắng bắt được Q)
+  # b2 = Board(10, 10)
+  # b2.put(0, 0, 'K', 'w')
+  # b2.put(1, 1, 'Q', 'b')
+  # b2.put(3, 3, 'K', 'b')  # xa hơn, ô (1,1) không còn bị vua đen khống chế
+  # print("In-check (w) #2:", b2.is_in_check('w'))
+  # print("Legal moves (w) #2:", len(b2.legal_moves_for('w')))
+  # print("Is checkmated (w) #2:", b2.is_checkmated('w'))
