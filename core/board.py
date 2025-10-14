@@ -56,6 +56,26 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def is_in_check(self, color: str) -> bool:
+    """
+    Kiểm tra bên `color` ('w' hoặc 'b') có đang bị chiếu không (O(1)).
+    Yêu cầu:
+      - self._royal_pos là dict {'w': (x,y)|None, 'b': (x,y)|None}
+        và được cập nhật nhất quán bởi set_royal/put/clear/apply_move.
+      - is_square_attacked(x, y, by_color) đã sẵn sàng.
+    Raises:
+      ValueError: nếu cache không có vị trí royal cho `color`.
+    """
+    rp = getattr(self, "_royal_pos", None)
+    if not isinstance(rp, dict) or color not in rp or rp[color] is None:
+      raise ValueError("Thiếu vị trí royal trong cache; hãy đảm bảo set_royal/apply_move cập nhật self._royal_pos.")
+    for royal in rp[color]:
+      rx, ry = royal
+      opponent = 'b' if color == 'w' else 'w'
+      if self.is_square_attacked(rx, ry, opponent):
+        return True
+    return False
+  
   def is_square_attacked(self, x: int, y: int, by_color: str) -> bool:
     """
     Trả về True nếu ô (x,y) đang bị bên `by_color` khống chế.
@@ -167,7 +187,7 @@ class Board:
       # Gỡ nạn nhân EP khỏi index trước khi xóa
       if hasattr(self, "_index_remove"):
         self._index_remove(cx, cy)
-      self.clear(cx, cy)
+      self.clear(cx, cy)  # clear(...) nên đã tự xử lý royal-cache nếu nạn nhân là royal
 
     # 2) Ăn thường (khi không phải EP)
     dst_piece = self.at(mv.tx, mv.ty)
@@ -177,12 +197,12 @@ class Board:
       # Gỡ mục index của quân bị ăn ở đích trước khi xóa
       if hasattr(self, "_index_remove"):
         self._index_remove(mv.tx, mv.ty)
-      self.clear(mv.tx, mv.ty)
+      self.clear(mv.tx, mv.ty)  # clear(...) cũng xử lý royal-cache nếu cần
 
     # 3) Di chuyển quân (nguồn -> đích) mà KHÔNG thay thế ô (Square)
     #    - clear ô nguồn (đặt piece=None)
     #    - đặt piece vào ô đích qua thuộc tính .piece
-    self.clear(mv.fx, mv.fy)
+    self.clear(mv.fx, mv.fy)  # nếu piece là royal, cache nguồn (nếu có) sẽ được unset tại đây
     dst_cell = self.grid[mv.tx][mv.ty]
     try:
       dst_cell.piece = piece
@@ -206,6 +226,26 @@ class Board:
     # Sau khi đặt xong (đã tính cả promotion), bổ sung index cho ô đích
     if hasattr(self, "_index_add"):
       self._index_add(mv.tx, mv.ty)
+
+    # >>> ROYAL-CACHE: cập nhật vị trí mới nếu quân đến đích (sau promote) là royal
+    occupant = promoted if promoted is not None else piece
+    is_royal = getattr(occupant, "is_royal", None)
+    if is_royal is None:
+      # fallback nếu chưa có property is_royal
+      is_royal = getattr(occupant, "_is_royal", False)
+    if is_royal:
+      setter = getattr(self, "_royal_cache_set", None)
+      if callable(setter):
+        setter(occupant.color, (mv.tx, mv.ty))
+      else:
+        # fallback an toàn nếu helper chưa sẵn sàng
+        try:
+          if not isinstance(getattr(self, "_royal_pos", None), dict):
+            self._royal_pos = {'w': None, 'b': None}
+          self._royal_pos[occupant.color] = (mv.tx, mv.ty)
+        except Exception:
+          pass
+    # <<< ROYAL-CACHE
 
     # 5) Reset EP mặc định; nếu double-step thì set EP mới (schema: list-of-tuples)
     self.en_passant_target = None
@@ -542,11 +582,9 @@ class Board:
 
 if __name__ == "__main__":
   b = Board(10, 10)
-  b.setup_from_layout()
+  b.put(5,5,'K','w')
+  b.put(0,5,'R','b')
+  b.set_royal(5,5)
   print(b.as_ascii())
   print(b.royal_positions())
-  mv=Move(9,5,5,5,b.at(9,5))
-  b.apply_move(mv)
-  print(b.as_ascii())
-  print(b.royal_positions())
-  print(b.at(5,5))
+  print(b.is_in_check('w'))
