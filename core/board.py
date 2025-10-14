@@ -73,85 +73,78 @@ class Board:
   def legal_moves_for(self, color: str) -> "list[Move]":
     """
     Trả về danh sách nước đi hợp lệ cho bên `color` với cắt tỉa theo trạng thái chiếu.
+    Tương thích với index mới: self._pieces[color] là list[tuple[Piece,int,int]].
     Ý tưởng:
       - Tìm ô Vua (từ cache hoàng gia) và liệt kê kẻ chiếu hiện tại.
-      - Nếu double-check: chỉ cho phép nước đi của Vua sang ô không bị tấn công.
-      - Nếu single-check: chỉ giữ (a) Vua chạy; (b) bắt kẻ chiếu; (c) chặn đường (nếu kẻ chiếu đi theo tia).
-      - Chỉ những ứng viên đã qua cắt tỉa mới kiểm tra `causes_self_check(mv)`.
-    Lợi ích: giảm đáng kể số lần mô phỏng/unmake move, đặc biệt trong positions đang bị chiếu.
+      - Double-check: chỉ cho phép nước đi của Vua tới ô không bị tấn công.
+      - Single-check: chỉ giữ (a) Vua chạy; (b) bắt kẻ chiếu; (c) chặn tia (nếu kẻ chiếu là quân đi theo tia).
+      - Chỉ ứng viên sau cắt tỉa mới kiểm tra `causes_self_check(mv)`.
     """
     legal: list[Move] = []
     opp = 'b' if color == 'w' else 'w'
 
-    # 1) Lấy vị trí vua từ cache (giả định đúng 1 vua).
+    # 1) Lấy vị trí vua từ cache (giả định phải có ít nhất 1 ô royal).
     rps = self._royal_pos.get(color)
     if not rps:
       return legal
     kx, ky = next(iter(rps))
 
-    # 2) Tìm danh sách kẻ chiếu hiện tại (rẻ hơn mô phỏng hàng loạt).
+    # 2) Tìm danh sách kẻ chiếu hiện tại.
     attackers: list[tuple[int,int,"Piece"]] = []
-    opp_pos = self._pieces.get(opp) or set()
-    for (ax, ay) in opp_pos:
-      ap = self.at(ax, ay)
-      if ap and ap.can_attack(self, ax, ay, kx, ky):
+    opp_pos = self._pieces.get(opp) or []
+    for item in list(opp_pos):
+      ap, ax, ay = item  # index mới: (Piece, x, y)
+      # Phòng chỉ mục lệch: xác thực lại quân tại (ax,ay)
+      if self.at(ax, ay) is not ap:
+        continue
+      if ap.can_attack(self, ax, ay, kx, ky):
         attackers.append((ax, ay, ap))
 
-    # 3) Nếu double-check: chỉ duyệt nước đi của Vua → ô không bị tấn công.
+    # 3) Nếu double-check: chỉ cho phép nước đi của Vua → ô không bị tấn công.
     if len(attackers) >= 2:
-      # Tìm ô vua (lại) vì có thể nhiều vua trong biến thể; ta lọc đúng ô chứa King.
       kp = self.at(kx, ky)
       if kp is None or kp.color != color:
         return legal
       for mv in self.collect_moves(kx, ky):
-        # Chỉ nhận nước đi của vua tới ô không bị tấn công bởi đối thủ.
         if mv.tx == mv.fx and mv.ty == mv.fy:
           continue
         if not self.is_square_attacked(mv.tx, mv.ty, opp) and not self.causes_self_check(mv):
           legal.append(mv)
       return legal
 
-    # 4) Single-check hoặc không bị chiếu: chuẩn bị tập chặn/bắt để cắt tỉa.
+    # 4) Single-check: chuẩn bị tập bắt/chặn để cắt tỉa.
     capture_targets: set[tuple[int,int]] = set()
     block_squares: set[tuple[int,int]] = set()
     if len(attackers) == 1:
       ax, ay, ap = attackers[0]
       capture_targets.add((ax, ay))
-      # Nếu kẻ chiếu là quân đi theo tia (B/R/Q; Archbishop 'H' có tia chéo), tính các ô chặn giữa vua và kẻ chiếu.
-      ray_kinds = {'B', 'R', 'Q', 'H'}
+      ray_kinds = {'B', 'R', 'Q', 'H'}  # quân đi theo tia
       if getattr(ap, "kind", None) in ray_kinds:
         dx = (ax - kx)
         dy = (ay - ky)
-        stepx = (0 if dx == 0 else (1 if dx > 0 else -1))
-        stepy = (0 if dy == 0 else (1 if dy > 0 else -1))
+        stepx = 0 if dx == 0 else (1 if dx > 0 else -1)
+        stepy = 0 if dy == 0 else (1 if dy > 0 else -1)
         cx, cy = kx + stepx, ky + stepy
         while (cx, cy) != (ax, ay):
           block_squares.add((cx, cy))
-          cx += stepx
-          cy += stepy
+          cx += stepx; cy += stepy
 
-    # 5) Duyệt theo index của bên mình + cắt tỉa trước khi mô phỏng.
-    my_pos = self._pieces.get(color) or set()
-    for (x, y) in list(my_pos):
-      p = self.at(x, y)
-      if p is None or p.color != color:
+    # 5) Duyệt quân bên mình theo index mới (Piece,x,y) và cắt tỉa trước khi mô phỏng.
+    my_pos = self._pieces.get(color) or []
+    for item in list(my_pos):
+      p, x, y = item
+      if self.at(x, y) is not p or p.color != color:
         continue
       is_king = getattr(p, "kind", None) == 'K'
 
       for mv in self.collect_moves(x, y):
-        # CẮT TỈA NHANH:
         if len(attackers) == 1 and not is_king:
-          # Không phải vua: chỉ cho phép (bắt kẻ chiếu) hoặc (chặn đường).
           if (mv.tx, mv.ty) not in capture_targets and (mv.tx, mv.ty) not in block_squares:
             continue
         elif len(attackers) >= 2 and not is_king:
-          # Double-check đã return ở trên; phòng hờ:
           continue
-        # Nếu là nước đi của vua: đích phải không bị tấn công.
         if is_king and self.is_square_attacked(mv.tx, mv.ty, opp):
           continue
-
-        # Kiểm tra cuối cùng bằng mô phỏng không tạo self-check.
         if not self.causes_self_check(mv):
           legal.append(mv)
 
@@ -795,27 +788,32 @@ class Board:
     if not (0 <= x < self.h and 0 <= y < self.w):
       raise IndexError(f"out of board bounds: (x={x}, y={y})")
 
+  def __repr__(self):
+    return self.as_ascii()
+  
 if __name__ == "__main__":
-  # --- Mock test: checkmate vs non-mate ---
-  print("\n[MockTest] Checkmate & Non-mate smoke test")
+  # # --- Mock test: checkmate vs non-mate ---
+  # print("\n[MockTest] Checkmate & Non-mate smoke test")
 
-  b = Board(10, 10)  # bảng trống nếu không gọi setup_from_layout()
-  # TH1: Mate đơn giản
-  # Vua trắng ở góc (0,0); Hậu đen (1,1) chiếu; Vua đen (2,2) bảo vệ ô (1,1)
-  b.put(0, 0, 'K', 'w')
-  b.put(1, 1, 'Q', 'b')
-  b.put(2, 2, 'K', 'b')
-  b.set_royal(0,0)
-  print(b.as_ascii())
-  print("In-check (w):", b.is_in_check('w'))
-  print("Legal moves (w):", len(b.legal_moves_for('w')))
+  # b = Board(10, 10)  # bảng trống nếu không gọi setup_from_layout()
+  # # TH1: Mate đơn giản
+  # # Vua trắng ở góc (0,0); Hậu đen (1,1) chiếu; Vua đen (2,2) bảo vệ ô (1,1)
+  # b.put(0, 0, 'K', 'w')
+  # b.put(1, 1, 'Q', 'b')
+  # b.put(2, 2, 'K', 'b')
+  # b.set_royal(0,0)
+  # print(b.as_ascii())
+  # print("In-check (w):", b.is_in_check('w'))
+  # print("Legal moves (w):", len(b.legal_moves_for('w')))
   # print("Is checkmated (w):", b.is_checkmated('w'))
 
-  # # TH2: Không còn là mate (đưa Vua đen ra xa để K trắng bắt được Q)
-  # b2 = Board(10, 10)
-  # b2.put(0, 0, 'K', 'w')
-  # b2.put(1, 1, 'Q', 'b')
-  # b2.put(3, 3, 'K', 'b')  # xa hơn, ô (1,1) không còn bị vua đen khống chế
-  # print("In-check (w) #2:", b2.is_in_check('w'))
-  # print("Legal moves (w) #2:", len(b2.legal_moves_for('w')))
+  #TH2: Không còn là mate (đưa Vua đen ra xa để K trắng bắt được Q)
+  b2 = Board(10, 10)
+  b2.put(0, 0, 'K', 'w')
+  b2.put(1, 1, 'Q', 'b')
+  b2.put(3, 3, 'K', 'b')  # xa hơn, ô (1,1) không còn bị vua đen khống chế
+  print(b2)
+  b2.set_royal(0,0)
+  print("In-check (w) #2:", b2.is_in_check('w'))
+  print("Legal moves (w) #2:", len(b2.legal_moves_for('w')))
   # print("Is checkmated (w) #2:", b2.is_checkmated('w'))
