@@ -56,22 +56,136 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def causes_self_check(self, mv: "Move") -> bool:
+    """
+    Trả về True nếu thực hiện mv xong thì bên của mv.piece.color vẫn/đang bị chiếu
+    (nước đi KHÔNG hợp lệ về an toàn hoàng gia).
+    Cách làm: mô phỏng apply_move trên chính bàn cờ rồi HOÀN TÁC ngay (không deepcopy).
+    Bảo toàn:
+      - Tự phục hồi index & royal-cache khi khôi phục các ô đã đổi (không dùng put()).
+      - Hỗ trợ: ăn thường, en passant, promotion, double-step.
+    """
+    # 1) Lấy thông tin bên đi + snapshot tối thiểu
+    side_piece = mv.piece if getattr(mv, "piece", None) is not None else self.at(mv.fx, mv.fy)
+    if side_piece is None:
+      raise ValueError("causes_self_check: no piece at source.")
+    side = side_piece.color
+    prev_ep = getattr(self, "en_passant_target", None)
+
+    src_piece = self.at(mv.fx, mv.fy)
+    dst_piece_before = self.at(mv.tx, mv.ty)
+
+    ep_victim_pos = None
+    ep_victim_piece = None
+    if mv.is_en_passant:
+      ep = self.en_passant_target
+      if not ep:
+        raise ValueError("causes_self_check: EP flagged but no EP target.")
+      (etx, ety), (cx, cy) = ep
+      if (etx, ety) != (mv.tx, mv.ty):
+        raise ValueError("causes_self_check: EP destination mismatch.")
+      ep_victim_pos = (cx, cy)
+      ep_victim_piece = self.at(cx, cy)
+
+    # 2) Mô phỏng và kiểm tra
+    in_check = True
+    try:
+      self.apply_move(mv)
+      in_check = self.is_in_check(side)
+    finally:
+      # 3) HOÀN TÁC — khôi phục theo thứ tự ngược
+
+      # 3.1) Khôi phục EP marker
+      self.en_passant_target = prev_ep
+
+      # 3.2) Xóa quân tại đích (kể cả promoted)
+      self.clear(mv.tx, mv.ty)
+
+      # 3.3) Nếu là ăn thường (không EP) và đích vốn có quân -> khôi phục đúng instance cũ
+      if (not mv.is_en_passant) and (dst_piece_before is not None):
+        cell = self.grid[mv.tx][mv.ty]
+        try:
+          cell.set_piece(dst_piece_before)
+        except Exception:
+          try:
+            cell.piece = dst_piece_before
+          except Exception:
+            self.grid[mv.tx][mv.ty] = dst_piece_before
+        if hasattr(self, "_index_add"):
+          self._index_add(mv.tx, mv.ty)
+        is_royal = getattr(dst_piece_before, "is_royal", getattr(dst_piece_before, "_is_royal", False))
+        if is_royal:
+          try:
+            self._royal_pos[dst_piece_before.color].add((mv.tx, mv.ty))
+          except Exception:
+            pass
+
+      # 3.4) Nếu là EP, khôi phục nạn nhân ở (cx,cy)
+      if mv.is_en_passant and ep_victim_pos is not None and ep_victim_piece is not None:
+        cx, cy = ep_victim_pos
+        cell = self.grid[cx][cy]
+        try:
+          cell.set_piece(ep_victim_piece)
+        except Exception:
+          try:
+            cell.piece = ep_victim_piece
+          except Exception:
+            self.grid[cx][cy] = ep_victim_piece
+        if hasattr(self, "_index_add"):
+          self._index_add(cx, cy)
+        is_royal = getattr(ep_victim_piece, "is_royal", getattr(ep_victim_piece, "_is_royal", False))
+        if is_royal:
+          try:
+            self._royal_pos[ep_victim_piece.color].add((cx, cy))
+          except Exception:
+            pass
+
+      # 3.5) Đặt lại quân nguồn về vị trí cũ (đúng instance gốc)
+      cell = self.grid[mv.fx][mv.fy]
+      try:
+        cell.set_piece(src_piece)
+      except Exception:
+        try:
+          cell.piece = src_piece
+        except Exception:
+          self.grid[mv.fx][mv.fy] = src_piece
+      if hasattr(self, "_index_add"):
+        self._index_add(mv.fx, mv.fy)
+      is_royal = getattr(src_piece, "is_royal", getattr(src_piece, "_is_royal", False))
+      if is_royal:
+        try:
+          self._royal_pos[src_piece.color].add((mv.fx, mv.fy))
+        except Exception:
+          pass
+
+    return in_check
+  
   def is_in_check(self, color: str) -> bool:
     """
-    Kiểm tra bên `color` ('w' hoặc 'b') có đang bị chiếu không (O(1)).
-    Yêu cầu:
-      - self._royal_pos là dict {'w': (x,y)|None, 'b': (x,y)|None}
-        và được cập nhật nhất quán bởi set_royal/put/clear/apply_move.
-      - is_square_attacked(x, y, by_color) đã sẵn sàng.
+    Kiểm tra bên `color` ('w' hoặc 'b') có đang bị chiếu không.
+    Tương thích cache: self._royal_pos: dict[str, set[tuple[int,int]]]
+    (có thể có 0, 1, hoặc nhiều ô 'royal' cho mỗi màu).
+    Trả về:
+      - True nếu ít nhất một ô royal của `color` đang bị tấn công.
+      - False nếu không ô nào bị tấn công (hoặc set rỗng).
     Raises:
-      ValueError: nếu cache không có vị trí royal cho `color`.
+      ValueError: nếu self._royal_pos không tồn tại/không phải dict hoặc thiếu key `color`.
     """
     rp = getattr(self, "_royal_pos", None)
-    if not isinstance(rp, dict) or color not in rp or rp[color] is None:
-      raise ValueError("Thiếu vị trí royal trong cache; hãy đảm bảo set_royal/apply_move cập nhật self._royal_pos.")
-    for royal in rp[color]:
-      rx, ry = royal
-      opponent = 'b' if color == 'w' else 'w'
+    if not isinstance(rp, dict) or color not in rp:
+      raise ValueError("Thiếu cache royal cho màu yêu cầu.")
+
+    positions = rp[color]
+
+    # Chuẩn hoá phòng khi triển khai khác: tuple đơn → bọc thành set một phần tử
+    if isinstance(positions, tuple) and len(positions) == 2 and all(isinstance(v, int) for v in positions):
+      positions = {positions}
+
+    if not isinstance(positions, set):
+      raise ValueError("Định dạng cache royal không hợp lệ (kỳ vọng set[(x,y)]).")
+
+    opponent = 'b' if color == 'w' else 'w'
+    for rx, ry in positions:
       if self.is_square_attacked(rx, ry, opponent):
         return True
     return False
@@ -581,10 +695,28 @@ class Board:
       raise IndexError(f"out of board bounds: (x={x}, y={y})")
 
 if __name__ == "__main__":
+  # --- Smoke test: causes_self_check trên tình huống 'gim' ---
+  print("\n[Smoke] causes_self_check với thế 'gim'...")
   b = Board(10, 10)
-  b.put(5,5,'K','w')
-  b.put(0,5,'R','b')
-  b.set_royal(5,5)
+
+  # Đặt quân: vua trắng tại (5,5), xe trắng chắn tại (5,4), xe đen bắn ngang từ (5,0)
+  b.put(5, 5, 'K', 'w'); b.set_royal(5, 5)
+  b.put(5, 4, 'R', 'w')
+  b.put(5, 0, 'R', 'b')
   print(b.as_ascii())
-  print(b.royal_positions())
-  print(b.is_in_check('w'))
+
+  # Sinh pseudo-moves cho xe trắng đang 'gim'
+  pseudo = b.collect_moves(5, 4)
+
+  # Lọc bằng causes_self_check
+  bad = [m for m in pseudo if b.causes_self_check(m)]     # các nước làm lộ chiếu (KHÔNG hợp lệ)
+  good = [m for m in pseudo if not b.causes_self_check(m)]  # các nước vẫn che/không lộ vua
+  print("Tổng pseudo:", len(pseudo))
+  print("Hợp lệ (không tự chiếu):", len(good))
+  print("Không hợp lệ (tự chiếu):", len(bad))
+
+  # In nhanh kết quả để quan sát
+  if good:
+    print("  -> Ví dụ hợp lệ:", good[0])
+  if bad:
+    print("  -> Ví dụ không hợp lệ:", bad[0])
