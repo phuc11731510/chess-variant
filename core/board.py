@@ -56,6 +56,93 @@ class Board:
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
     self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
   
+  def legal_moves_for(self, color: str) -> "list[Move]":
+    """
+    Trả về danh sách nước đi hợp lệ cho bên `color` với cắt tỉa theo trạng thái chiếu.
+    Ý tưởng:
+      - Tìm ô Vua (từ cache hoàng gia) và liệt kê kẻ chiếu hiện tại.
+      - Nếu double-check: chỉ cho phép nước đi của Vua sang ô không bị tấn công.
+      - Nếu single-check: chỉ giữ (a) Vua chạy; (b) bắt kẻ chiếu; (c) chặn đường (nếu kẻ chiếu đi theo tia).
+      - Chỉ những ứng viên đã qua cắt tỉa mới kiểm tra `causes_self_check(mv)`.
+    Lợi ích: giảm đáng kể số lần mô phỏng/unmake move, đặc biệt trong positions đang bị chiếu.
+    """
+    legal: list[Move] = []
+    opp = 'b' if color == 'w' else 'w'
+
+    # 1) Lấy vị trí vua từ cache (giả định đúng 1 vua).
+    rps = self._royal_pos.get(color)
+    if not rps:
+      return legal
+    kx, ky = next(iter(rps))
+
+    # 2) Tìm danh sách kẻ chiếu hiện tại (rẻ hơn mô phỏng hàng loạt).
+    attackers: list[tuple[int,int,"Piece"]] = []
+    opp_pos = self._pieces.get(opp) or set()
+    for (ax, ay) in opp_pos:
+      ap = self.at(ax, ay)
+      if ap and ap.can_attack(self, ax, ay, kx, ky):
+        attackers.append((ax, ay, ap))
+
+    # 3) Nếu double-check: chỉ duyệt nước đi của Vua → ô không bị tấn công.
+    if len(attackers) >= 2:
+      # Tìm ô vua (lại) vì có thể nhiều vua trong biến thể; ta lọc đúng ô chứa King.
+      kp = self.at(kx, ky)
+      if kp is None or kp.color != color:
+        return legal
+      for mv in self.collect_moves(kx, ky):
+        # Chỉ nhận nước đi của vua tới ô không bị tấn công bởi đối thủ.
+        if mv.tx == mv.fx and mv.ty == mv.fy:
+          continue
+        if not self.is_square_attacked(mv.tx, mv.ty, opp) and not self.causes_self_check(mv):
+          legal.append(mv)
+      return legal
+
+    # 4) Single-check hoặc không bị chiếu: chuẩn bị tập chặn/bắt để cắt tỉa.
+    capture_targets: set[tuple[int,int]] = set()
+    block_squares: set[tuple[int,int]] = set()
+    if len(attackers) == 1:
+      ax, ay, ap = attackers[0]
+      capture_targets.add((ax, ay))
+      # Nếu kẻ chiếu là quân đi theo tia (B/R/Q; Archbishop 'H' có tia chéo), tính các ô chặn giữa vua và kẻ chiếu.
+      ray_kinds = {'B', 'R', 'Q', 'H'}
+      if getattr(ap, "kind", None) in ray_kinds:
+        dx = (ax - kx)
+        dy = (ay - ky)
+        stepx = (0 if dx == 0 else (1 if dx > 0 else -1))
+        stepy = (0 if dy == 0 else (1 if dy > 0 else -1))
+        cx, cy = kx + stepx, ky + stepy
+        while (cx, cy) != (ax, ay):
+          block_squares.add((cx, cy))
+          cx += stepx
+          cy += stepy
+
+    # 5) Duyệt theo index của bên mình + cắt tỉa trước khi mô phỏng.
+    my_pos = self._pieces.get(color) or set()
+    for (x, y) in list(my_pos):
+      p = self.at(x, y)
+      if p is None or p.color != color:
+        continue
+      is_king = getattr(p, "kind", None) == 'K'
+
+      for mv in self.collect_moves(x, y):
+        # CẮT TỈA NHANH:
+        if len(attackers) == 1 and not is_king:
+          # Không phải vua: chỉ cho phép (bắt kẻ chiếu) hoặc (chặn đường).
+          if (mv.tx, mv.ty) not in capture_targets and (mv.tx, mv.ty) not in block_squares:
+            continue
+        elif len(attackers) >= 2 and not is_king:
+          # Double-check đã return ở trên; phòng hờ:
+          continue
+        # Nếu là nước đi của vua: đích phải không bị tấn công.
+        if is_king and self.is_square_attacked(mv.tx, mv.ty, opp):
+          continue
+
+        # Kiểm tra cuối cùng bằng mô phỏng không tạo self-check.
+        if not self.causes_self_check(mv):
+          legal.append(mv)
+
+    return legal
+  
   def causes_self_check(self, mv: "Move") -> bool:
     """
     Trả về True nếu thực hiện mv xong thì bên của mv.piece.color vẫn/đang bị chiếu

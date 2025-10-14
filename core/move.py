@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # Tránh vòng phụ thuộc lúc runtime; chỉ dùng cho type hints
-    from core.piece import Piece
+  # Tránh vòng phụ thuộc lúc runtime; chỉ dùng cho type hints
+  from core.piece import Piece
 
 @dataclass(slots=True)
 class Move:
