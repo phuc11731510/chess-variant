@@ -842,7 +842,7 @@ class Board:
       raise IndexError(f"out of board bounds: (x={x}, y={y})")
 
   def __repr__(self):
-    return self.as_ascii()
+    return self.as_ascii()+'\n'
   
 if __name__ == "__main__":
   # # --- Mock test: checkmate vs non-mate ---
