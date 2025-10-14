@@ -2,6 +2,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+from itertools import chain
 
 # Cho phép chạy trực tiếp file này trên Windows (không đụng venv)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -9,85 +10,68 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.board import Board
 from core.move import Move
 
+from itertools import chain
+
 def position_key(board: "Board", turn: str) -> str:
   """
-  Tạo khóa vị thế gọn & nhanh cho threefold.
-  Thành phần: bên sắp đi + toàn bộ quân (kind,color,royal,x,y) + quyền EP.
-  - Ưu tiên O(P) đọc từ board._pieces nếu có; fallback quét H×W.
-  - EP-rights: lấy ô đích bắt EP (cap_x, cap_y) nếu hợp lệ; else "~".
+  Khóa vị thế (threefold) tối ưu:
+    - Duyệt _pieces O(P) bằng một vòng for nhờ chain(['w'],['b']).
+    - Fallback quét bảng chỉ khi index rỗng.
+  Thành phần: t (turn) + p (k,c,r,x,y) + ep (midx,midy hoặc "~").
   """
-  items = []
+  items: list[tuple[str, str, int, int, int]] = []
+
   idx = getattr(board, "_pieces", None)
-
   if isinstance(idx, dict):
-    # New schema: {'w': [(p,x,y),...], 'b': [(p,x,y),...]}
-    for bucket in idx.values():
-      for entry in bucket:
-        # entry chuẩn: (p, x, y)
-        if isinstance(entry, (list, tuple)):
-          if len(entry) == 3:
-            p, x, y = entry
-          elif len(entry) == 1 and isinstance(entry[0], (list, tuple)) and len(entry[0]) == 3:
-            # phòng trường hợp lồng 1 lớp ((p,x,y),)
-            p, x, y = entry[0]
-          elif len(entry) == 2:
-            # legacy: (x,y) → cần tra p
-            x, y = entry
-            p = board.at(x, y)
-          else:
-            continue
-        else:
-          # entry không phải tuple/list → bỏ qua
-          continue
-        if p is None:
-          continue
-        items.append((p.kind, p.color, bool(getattr(p, "_is_royal", False)), int(x), int(y)))
-
-  elif idx:
-    # Fallback: iterable phẳng [(p,x,y)] hoặc {(x,y)}
-    for entry in idx:
-      if isinstance(entry, (list, tuple)):
-        if len(entry) == 3:
-          p, x, y = entry
-        elif len(entry) == 2:
-          x, y = entry
-          p = board.at(x, y)
-        elif len(entry) == 1 and isinstance(entry[0], (list, tuple)):
-          inner = entry[0]
-          if len(inner) == 3:
-            p, x, y = inner
-          elif len(inner) == 2:
-            x, y = inner
-            p = board.at(x, y)
-          else:
-            continue
-        else:
-          continue
-      else:
+    entries = chain(idx.get("w", ()), idx.get("b", ()))  # 1 vòng for
+    for e in entries:
+      if not isinstance(e, (list, tuple)) or len(e) not in (2, 3):
         continue
+      if len(e) == 3:
+        p, x, y = e
+      else:  # (x,y) legacy
+        x, y = e
+        p = board.at(x, y)
       if p is None:
         continue
-      items.append((p.kind, p.color, bool(getattr(p, "_is_royal", False)), int(x), int(y)))
+      items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, int(x), int(y)))
 
-  else:
-    # Quét toàn bảng (ít dùng)
+  elif idx:
+    # Iterable phẳng: duyệt 1 vòng for
+    for e in idx:
+      if not isinstance(e, (list, tuple)) or len(e) not in (2, 3):
+        continue
+      if len(e) == 3:
+        p, x, y = e
+      else:
+        x, y = e
+        p = board.at(x, y)
+      if p is None:
+        continue
+      items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, int(x), int(y)))
+
+  if not items:
+    # Fallback duy nhất dùng 2 vòng for (chỉ khi index rỗng → hiếm)
     H, W = getattr(board, "h", 10), getattr(board, "w", 10)
     for x in range(H):
       for y in range(W):
         p = board.at(x, y)
         if p:
-          items.append((p.kind, p.color, bool(getattr(p, "_is_royal", False)), x, y))
+          items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, x, y))
 
-  items.sort(key=lambda t: (t[1], t[0], t[3], t[4]))  # color, kind, x, y
+  # Thứ tự ổn định
+  items.sort(key=lambda t: (t[1], t[0], t[3], t[4], t[2]))
 
+  # EP-rights
   ep = getattr(board, "en_passant_target", None)
   ep_str = "~"
-  if ep and isinstance(ep, (list, tuple)) and len(ep) == 2 and isinstance(ep[0], (list, tuple)) and len(ep[0]) == 2:
-    # theo schema hiện tại: ep[0] là ô đích bắt EP (midx, midy)
-    ep_str = f"{int(ep[0][0])},{int(ep[0][1])}"
+  if (isinstance(ep, (list, tuple)) and len(ep) == 2 and
+      isinstance(ep[0], (list, tuple)) and len(ep[0]) == 2):
+    midx, midy = int(ep[0][0]), int(ep[0][1])
+    ep_str = f"{midx},{midy}"
 
-  parts = ["t=", turn, "|p=", ";".join(f"{k},{c},{1 if r else 0},{x},{y}" for k, c, r, x, y in items), "|ep=", ep_str]
-  return "".join(parts)
+  pieces_blob = ";".join(f"{k},{c},{r},{x},{y}" for k, c, r, x, y in items)
+  return f"t={turn}|p={pieces_blob}|ep={ep_str}"
 
 class Game:
   """
@@ -121,8 +105,62 @@ class Game:
 
 
 if __name__ == "__main__":
-  # Demo tối giản: EP đích trống nhưng vẫn tính là bắt → halfmove_clock reset
+  """
+  Mock test ngắn (không assert) để kiểm thử:
+    1) position_key trước/sau double-step mở EP.
+    2) EP-capture làm halfmove_clock reset và ep=~.
+    3) Đếm lặp vị thế qua position_counts.
+  """
+
   b = Board(10, 10)
-  b.setup_from_layout()
+
+  # Đặt ít quân đủ tái hiện EP:
+  # Trắng đi xuống (x+1), Đen đi lên (x-1).
+  b.put(3, 3, "P", "w")  # White pawn tại (3,3)
+  b.put(1, 4, "P", "b")  # Black pawn tại (1,4)
+
+  # # Game tối giản: chỉ quản lý turn + halfmove + position_counts
   g = Game(b, turn="b")
-  print(position_key(b,'w'))
+
+  print(b)
+  
+  print("== START ==")
+  k0 = position_key(b, g.turn)
+  print("Turn:", g.turn, "| Key:", k0)
+  print("Repetitions of current key:", g.position_counts.get(k0, 0))
+  # print("Halfmove clock:", g.halfmove_clock)
+  # print("-")
+
+  # # Nước 1 (Đen): double-step (1,4)->(3,4) để mở EP
+  # mv_b_ds = Move(1, 4, 3, 4, b.at(1, 4), is_double_step=True)
+  # g.play(mv_b_ds)
+
+  # k1 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Trắng
+  # print("After Black double-step")
+  # print("Turn:", g.turn, "| Key:", k1)
+  # print("EP should be set (ep!=~). Key tail:", k1.split("|ep=")[-1])
+  # print("Repetitions of current key:", g.position_counts.get(k1, 0))
+  # print("Halfmove clock (should NOT reset yet):", g.halfmove_clock)
+  # print("-")
+
+  # # Nước 2 (Trắng): bắt EP (3,3)->(2,4) — đích trống nhưng là capture
+  # mv_w_ep = Move(3, 3, 2, 4, b.at(3, 3), is_en_passant=True)
+  # g.play(mv_w_ep)
+
+  # k2 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Đen
+  # print("After White EP capture")
+  # print("Turn:", g.turn, "| Key:", k2)
+  # print("EP should be cleared (ep=~). Key tail:", k2.split("|ep=")[-1])
+  # print("Repetitions of current key:", g.position_counts.get(k2, 0))
+  # print("Halfmove clock (should RESET to 0):", g.halfmove_clock)
+  # print("-")
+
+  # # Minh họa threefold (đơn giản): in đếm key hiện tại rồi lặp lại chính key đó 2 lần
+  # # (Ở đây không phát sinh nước đi để quay lại vị thế y hệt; chỉ minh họa cơ chế đếm.)
+  # # Trong thực tế, bạn hãy tạo chuỗi nước đi qua lại để quay về cùng key.
+  # for i in range(2):
+  #   k = position_key(b, g.turn)
+  #   g.position_counts[k] = g.position_counts.get(k, 0) + 1
+  #   print(f"Manual bump #{i+1} → repetitions of current key:", g.position_counts[k])
+
+  # print("== END ==")
