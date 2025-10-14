@@ -58,4 +58,39 @@ class Game:
     self.position_counts[key] = self.position_counts.get(key, 0) + 1
 
 if __name__ == "__main__":
-  pass
+  # Mock test tối giản cho Game.update_rule_counters
+  b = Board(10, 10)
+
+  # Đặt vài quân tối thiểu để di chuyển: vua không cần thiết cho test này
+  b.put(3, 4, "P", "w")   # White Pawn ở (3,4) sẽ đi xuống (4,4)
+  b.put(5, 6, "N", "b")   # Black Knight ở (5,6) sẽ nhảy tới (3,5)
+
+  g = Game(b, turn="w")
+
+  # Kiểm tra vị thế ban đầu đã được đếm
+  init_key = f"{g.turn}|{b.as_ascii()}"
+  print(b)
+  
+  # 1) White Pawn tiến 1 ô, không bắt
+  mv1 = Move(3, 4, 2, 4, b.at(3, 4))
+  pre_dst = b.at(mv1.tx, mv1.ty)
+  did_capture = pre_dst is not None and getattr(pre_dst, "color", None) != mv1.piece.color
+  b.apply_move(mv1)
+  g.update_rule_counters(mv1, did_capture)
+  key_after_mv1 = f"{g.turn}|{b.as_ascii()}"
+
+  print(g.position_counts)
+  
+  # print("[MV1] halfmove_clock (expect 0) =", g.halfmove_clock)
+  # print("[MV1] position_counts[key_after_mv1] =", g.position_counts.get(key_after_mv1, 0))
+
+  # # 2) Black Knight nhảy không bắt
+  # mv2 = Move(5, 6, 3, 5, b.at(5, 6))
+  # pre_dst2 = b.at(mv2.tx, mv2.ty)
+  # did_capture2 = pre_dst2 is not None and getattr(pre_dst2, "color", None) != mv2.piece.color
+  # b.apply_move(mv2)
+  # g.update_rule_counters(mv2, did_capture2)
+  # key_after_mv2 = f"{g.turn}|{b.as_ascii()}"
+
+  # print("[MV2] halfmove_clock (expect 1) =", g.halfmove_clock)
+  # print("[MV2] position_counts[key_after_mv2] =", g.position_counts.get(key_after_mv2, 0))
