@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from itertools import chain
+from random import *
+from time import perf_counter
 
 # Cho phép chạy trực tiếp file này trên Windows (không đụng venv)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -158,66 +160,22 @@ class Game:
 
 
 if __name__ == "__main__":
-  """
-  Mock test ngắn (không assert) để kiểm thử:
-    1) position_key trước/sau double-step mở EP.
-    2) EP-capture làm halfmove_clock reset và ep=~.
-    3) Đếm lặp vị thế qua position_counts.
-  """
-
-  b = Board(10, 10)
-
-  # Đặt ít quân đủ tái hiện EP:
-  # Trắng đi xuống (x+1), Đen đi lên (x-1).
-  b.put(3, 3, "P", "w")  # White pawn tại (3,3)
-  b.put(1, 4, "P", "b")  # Black pawn tại (1,4)
-
-  # # Game tối giản: chỉ quản lý turn + halfmove + position_counts
-  g = Game(b, turn="b")
-
-  print(b)
-  
-  print("== START ==")
-  k0 = position_key(b, g.turn)
-  print("Turn:", g.turn, "| Key:", k0)
-  print("Repetitions of current key:", g.position_counts.get(k0, 0))
-  print("Halfmove clock:", g.halfmove_clock)
-  print("-")
-
-  # Nước 1 (Đen): double-step (1,4)->(3,4) để mở EP
-  mv_b_ds = Move(1, 4, 3, 4, b.at(1, 4), is_double_step=True)
-  g.play(mv_b_ds)
-
-  print(b)
-  
-  k1 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Trắng
-  print("After Black double-step")
-  print("Turn:", g.turn, "| Key:", k1)
-  print("EP should be set (ep!=~). Key tail:", k1.split("|ep=")[-1])
-  print("Repetitions of current key:", g.position_counts.get(k1, 0))
-  print("Halfmove clock (should NOT reset yet):", g.halfmove_clock)
-  print("-")
-  
-  # Nước 2 (Trắng): bắt EP (3,3)->(2,4) — đích trống nhưng là capture
-  mv_w_ep = Move(3, 3, 2, 4, b.at(3, 3), is_en_passant=True)
-  g.play(mv_w_ep)
-  
-  print(b)
-
-  k2 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Đen
-  print("After White EP capture")
-  print("Turn:", g.turn, "| Key:", k2)
-  print("EP should be cleared (ep=~). Key tail:", k2.split("|ep=")[-1])
-  print("Repetitions of current key:", g.position_counts.get(k2, 0))
-  print("Halfmove clock (should RESET to 0):", g.halfmove_clock)
-  print("-")
-
-  # Minh họa threefold (đơn giản): in đếm key hiện tại rồi lặp lại chính key đó 2 lần
-  # (Ở đây không phát sinh nước đi để quay lại vị thế y hệt; chỉ minh họa cơ chế đếm.)
-  # Trong thực tế, bạn hãy tạo chuỗi nước đi qua lại để quay về cùng key.
-  for i in range(2):
-    k = position_key(b, g.turn)
-    g.position_counts[k] = g.position_counts.get(k, 0) + 1
-    print(f"Manual bump #{i+1} → repetitions of current key:", g.position_counts[k])
-
-  # print("== END ==")
+  Danh_Sach_O=[(i, j) for i in range(10) for j in range(10)]
+  Danh_Sach_Quan=["K","Q","R","N","M","V","δ","Y","H"]
+  while True:
+    b=Board()
+    g=Game(b,turn='w')
+    Danh_Sach_60_O=sample(Danh_Sach_O,60)
+    Danh_Sach_60_Quan=choices(Danh_Sach_Quan,k=60)
+    for i in range(30):
+      x,y=Danh_Sach_60_O[i]
+      kind,color=Danh_Sach_60_Quan[i],'w'
+      g.board.put(x,y,kind,color)
+    for i in range(30,60):
+      x,y=Danh_Sach_60_O[i]
+      kind,color=Danh_Sach_60_Quan[i],'b'
+      g.board.put(x,y,kind,color)
+    t1=perf_counter()
+    
+    print(g.board)
+    break
