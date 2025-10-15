@@ -86,6 +86,54 @@ class Game:
     self.turn = turn
     self.halfmove_clock = 0  # 100 nửa-nước = 50 nước đầy đủ
 
+    self.position_counts: dict[str, int] = {}
+    k0 = position_key(self.board, self.turn)  # cần hàm position_key đã có ở trên file
+    self.position_counts[k0] = self.position_counts.get(k0, 0) + 1
+  
+  def result_if_over(self) -> str | None:
+    """
+    Kết luận ván cờ nếu đã ngã ngũ.
+    Ưu tiên:
+      1) Hòa threefold nếu có khóa vị thế xuất hiện ≥ 3 lần.
+      2) Hòa 50-nước nếu halfmove_clock >= 100.
+      3) Dùng Board.result_if_over() nếu có; nếu không, kiểm tra
+        Board.is_checkmated(self.turn) và Board.is_stalemated(self.turn).
+    Trả về:
+      - "draw_threefold" | "draw_50m" | "checkmate_w" | "checkmate_b" | "stalemate" | None
+    """
+    if getattr(self, "position_counts", None):
+      if max(self.position_counts.values(), default=0) >= 3:
+        return "draw_threefold"
+    if self.halfmove_clock >= 100:
+      return "draw_50m"
+
+    b = self.board
+    # Nếu Board đã có hàm tổng hợp:
+    if hasattr(b, "result_if_over"):
+      return b.result_if_over()
+
+    # Fallback: tự kiểm tra nếu Board có các API này
+    is_cm = getattr(b, "is_checkmated", None)
+    is_sm = getattr(b, "is_stalemated", None)
+    if callable(is_cm) and is_cm(self.turn):
+      # self.turn là bên SẮP đi và bị chiếu hết đường → checkmate cho đối phương
+      return "checkmate_b" if self.turn == "w" else "checkmate_w"
+    if callable(is_sm) and is_sm(self.turn):
+      return "stalemate"
+    return None
+  
+  def is_fifty_move_rule_draw(self) -> bool:
+    """Hòa 50-nước nếu không bắt và không P/Δ di chuyển trong 50 nước."""
+    return self.halfmove_clock >= 100
+  
+  def current_repetitions(self) -> int:
+    """Số lần xuất hiện của khóa vị thế hiện tại."""
+    return self.position_counts.get(position_key(self.board, self.turn), 0)
+  
+  def is_threefold(game: "Game") -> bool:
+    """Trả về True nếu có vị thế xuất hiện ≥ 3 lần (tiện kiểm tra nhanh)."""
+    return max(game.position_counts.values(), default=0) >= 3
+      
   def play(self, mv: "Move") -> None:
     """
     Thực thi 1 nước đi:
@@ -102,6 +150,11 @@ class Game:
     is_pawn_like = getattr(mv.piece, "kind", "") in {"P", "Δ"}
     self.halfmove_clock = 0 if (did_capture or is_pawn_like) else (self.halfmove_clock + 1)
     self.turn = "b" if self.turn == "w" else "w"
+    
+    # Ghi nhận key sau-apply cho threefold
+    k = position_key(self.board, self.turn)
+    self.position_counts[k] = self.position_counts.get(k, 0) + 1
+
 
 
 if __name__ == "__main__":
@@ -128,39 +181,43 @@ if __name__ == "__main__":
   k0 = position_key(b, g.turn)
   print("Turn:", g.turn, "| Key:", k0)
   print("Repetitions of current key:", g.position_counts.get(k0, 0))
-  # print("Halfmove clock:", g.halfmove_clock)
-  # print("-")
+  print("Halfmove clock:", g.halfmove_clock)
+  print("-")
 
-  # # Nước 1 (Đen): double-step (1,4)->(3,4) để mở EP
-  # mv_b_ds = Move(1, 4, 3, 4, b.at(1, 4), is_double_step=True)
-  # g.play(mv_b_ds)
+  # Nước 1 (Đen): double-step (1,4)->(3,4) để mở EP
+  mv_b_ds = Move(1, 4, 3, 4, b.at(1, 4), is_double_step=True)
+  g.play(mv_b_ds)
 
-  # k1 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Trắng
-  # print("After Black double-step")
-  # print("Turn:", g.turn, "| Key:", k1)
-  # print("EP should be set (ep!=~). Key tail:", k1.split("|ep=")[-1])
-  # print("Repetitions of current key:", g.position_counts.get(k1, 0))
-  # print("Halfmove clock (should NOT reset yet):", g.halfmove_clock)
-  # print("-")
+  print(b)
+  
+  k1 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Trắng
+  print("After Black double-step")
+  print("Turn:", g.turn, "| Key:", k1)
+  print("EP should be set (ep!=~). Key tail:", k1.split("|ep=")[-1])
+  print("Repetitions of current key:", g.position_counts.get(k1, 0))
+  print("Halfmove clock (should NOT reset yet):", g.halfmove_clock)
+  print("-")
+  
+  # Nước 2 (Trắng): bắt EP (3,3)->(2,4) — đích trống nhưng là capture
+  mv_w_ep = Move(3, 3, 2, 4, b.at(3, 3), is_en_passant=True)
+  g.play(mv_w_ep)
+  
+  print(b)
 
-  # # Nước 2 (Trắng): bắt EP (3,3)->(2,4) — đích trống nhưng là capture
-  # mv_w_ep = Move(3, 3, 2, 4, b.at(3, 3), is_en_passant=True)
-  # g.play(mv_w_ep)
+  k2 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Đen
+  print("After White EP capture")
+  print("Turn:", g.turn, "| Key:", k2)
+  print("EP should be cleared (ep=~). Key tail:", k2.split("|ep=")[-1])
+  print("Repetitions of current key:", g.position_counts.get(k2, 0))
+  print("Halfmove clock (should RESET to 0):", g.halfmove_clock)
+  print("-")
 
-  # k2 = position_key(b, g.turn)  # Sau khi đổi lượt → đến Đen
-  # print("After White EP capture")
-  # print("Turn:", g.turn, "| Key:", k2)
-  # print("EP should be cleared (ep=~). Key tail:", k2.split("|ep=")[-1])
-  # print("Repetitions of current key:", g.position_counts.get(k2, 0))
-  # print("Halfmove clock (should RESET to 0):", g.halfmove_clock)
-  # print("-")
-
-  # # Minh họa threefold (đơn giản): in đếm key hiện tại rồi lặp lại chính key đó 2 lần
-  # # (Ở đây không phát sinh nước đi để quay lại vị thế y hệt; chỉ minh họa cơ chế đếm.)
-  # # Trong thực tế, bạn hãy tạo chuỗi nước đi qua lại để quay về cùng key.
-  # for i in range(2):
-  #   k = position_key(b, g.turn)
-  #   g.position_counts[k] = g.position_counts.get(k, 0) + 1
-  #   print(f"Manual bump #{i+1} → repetitions of current key:", g.position_counts[k])
+  # Minh họa threefold (đơn giản): in đếm key hiện tại rồi lặp lại chính key đó 2 lần
+  # (Ở đây không phát sinh nước đi để quay lại vị thế y hệt; chỉ minh họa cơ chế đếm.)
+  # Trong thực tế, bạn hãy tạo chuỗi nước đi qua lại để quay về cùng key.
+  for i in range(2):
+    k = position_key(b, g.turn)
+    g.position_counts[k] = g.position_counts.get(k, 0) + 1
+    print(f"Manual bump #{i+1} → repetitions of current key:", g.position_counts[k])
 
   # print("== END ==")
