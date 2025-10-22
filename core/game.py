@@ -175,7 +175,10 @@ if __name__ == "__main__":
       x,y=Danh_Sach_60_O[i]
       kind,color=Danh_Sach_60_Quan[i],'b'
       g.board.put(x,y,kind,color)
-    t1=perf_counter()
-    
+    t_start = perf_counter()
+    outcome = g.result_if_over()
+    elapsed = perf_counter() - t_start
+    print("result:", outcome)
+    print(f"duration: {elapsed:.6f} seconds")
     print(g.board)
     break
