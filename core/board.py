@@ -45,7 +45,7 @@ class Board:
   grid: List[List[Square]]  # grid[x][y]
   _royal_pos: dict[str, set[tuple[int,int]]]
   en_passant_target: list[tuple[int, int]] | None
-  _pieces: dict[str,list[tuple[Piece,int,int]]]
+  _pieces: dict[str, dict[Piece, tuple[int, int]]]
 
   def __init__(self, w: int = 10, h: int = 10) -> None:
     """Tạo bàn rỗng w×h (mặc định 10×10), mỗi ô là Square(None)."""
@@ -54,7 +54,7 @@ class Board:
     self.grid = [[Square() for _ in range(w)] for _ in range(h)]
     self._royal_pos = {"w": set(), "b": set()}
     self.en_passant_target = None   # Chứa 2 tuple, vị trí EP và quân có thể bị bắt EP
-    self._pieces = {'w': [], 'b': []}  # list[tuple[Piece,int,int]]
+    self._pieces = {'w': {}, 'b': {}}  # dict[Piece, (x, y)]
   
   def result_if_over(self) -> str | None:
     """
@@ -85,10 +85,9 @@ class Board:
       - An toàn để dùng trong is_checkmated/is_stalemated/result_if_over.
     Độ phức tạp: O(K) với K = số nước phải thử cho tới khi gặp nước hợp lệ đầu tiên (thường nhỏ).
     """
-    my_pos = self._pieces.get(color) or []
-    for item in list(my_pos):
-      p, x, y = item  # index dạng (piece, x, y)
-      if self.at(x, y) is not p or p.color != color:
+    my_pos = self._pieces.get(color) or {}
+    for piece, (x, y) in list(my_pos.items()):
+      if self.at(x, y) is not piece or piece.color != color:
         continue
       for mv in self.collect_moves(x, y):
         if not self.causes_self_check(mv):
@@ -116,7 +115,7 @@ class Board:
   def legal_moves_for(self, color: str) -> "list[Move]":
     """
     Trả về danh sách nước đi hợp lệ cho bên `color` với cắt tỉa theo trạng thái chiếu.
-    Tương thích với index mới: self._pieces[color] là list[tuple[Piece,int,int]].
+    Tương thích với index mới: self._pieces[color] là dict[Piece, tuple[int,int]].
     Ý tưởng:
       - Tìm ô Vua (từ cache hoàng gia) và liệt kê kẻ chiếu hiện tại.
       - Double-check: chỉ cho phép nước đi của Vua tới ô không bị tấn công.
@@ -134,14 +133,13 @@ class Board:
 
     # 2) Tìm danh sách kẻ chiếu hiện tại.
     attackers: list[tuple[int,int,"Piece"]] = []
-    opp_pos = self._pieces.get(opp) or []
-    for item in list(opp_pos):
-      ap, ax, ay = item  # index mới: (Piece, x, y)
+    opp_pos = self._pieces.get(opp) or {}
+    for opp_piece, (ax, ay) in list(opp_pos.items()):
       # Phòng chỉ mục lệch: xác thực lại quân tại (ax,ay)
-      if self.at(ax, ay) is not ap:
+      if self.at(ax, ay) is not opp_piece:
         continue
-      if ap.can_attack(self, ax, ay, kx, ky):
-        attackers.append((ax, ay, ap))
+      if opp_piece.can_attack(self, ax, ay, kx, ky):
+        attackers.append((ax, ay, opp_piece))
 
     # 3) Nếu double-check: chỉ cho phép nước đi của Vua → ô không bị tấn công.
     if len(attackers) >= 2:
@@ -173,12 +171,11 @@ class Board:
           cx += stepx; cy += stepy
 
     # 5) Duyệt quân bên mình theo index mới (Piece,x,y) và cắt tỉa trước khi mô phỏng.
-    my_pos = self._pieces.get(color) or []
-    for item in list(my_pos):
-      p, x, y = item
-      if self.at(x, y) is not p or p.color != color:
+    my_pos = self._pieces.get(color) or {}
+    for piece, (x, y) in list(my_pos.items()):
+      if self.at(x, y) is not piece or piece.color != color:
         continue
-      is_king = getattr(p, "kind", None) == 'K'
+      is_king = getattr(piece, "kind", None) == 'K'
 
       for mv in self.collect_moves(x, y):
         if len(attackers) == 1 and not is_king:
@@ -194,220 +191,133 @@ class Board:
     return legal
   
   def causes_self_check(self, mv: "Move") -> bool:
-    """
-    Trả về True nếu thực hiện mv xong thì bên của mv.piece.color vẫn/đang bị chiếu
-    (nước đi KHÔNG hợp lệ về an toàn hoàng gia).
-    Cách làm: mô phỏng apply_move trên chính bàn cờ rồi HOÀN TÁC ngay (không deepcopy).
-    Bảo toàn:
-      - Tự phục hồi index & royal-cache khi khôi phục các ô đã đổi (không dùng put()).
-      - Hỗ trợ: ăn thường, en passant, promotion, double-step.
-    """
-    # 1) Lấy thông tin bên đi + snapshot tối thiểu
+    """Return True if executing mv leaves the mover still in check."""
+    def _is_royal(piece: Piece | None) -> bool:
+      if piece is None:
+        return False
+      flag = getattr(piece, "is_royal", None)
+      if flag is None:
+        flag = getattr(piece, "_is_royal", False)
+      return bool(flag)
+
     side_piece = mv.piece if getattr(mv, "piece", None) is not None else self.at(mv.fx, mv.fy)
     if side_piece is None:
       raise ValueError("causes_self_check: no piece at source.")
     side = side_piece.color
     prev_ep = getattr(self, "en_passant_target", None)
 
-    src_piece = self.at(mv.fx, mv.fy)
-    dst_piece_before = self.at(mv.tx, mv.ty)
+    def _make_move() -> dict[str, object]:
+      state: dict[str, object] = {
+        "prev_ep": prev_ep,
+        "captured_piece": None,
+        "captured_pos": None,
+        "promoted_piece": None,
+      }
 
-    ep_victim_pos = None
-    ep_victim_piece = None
-    if mv.is_en_passant:
-      ep = self.en_passant_target
-      if not ep:
-        raise ValueError("causes_self_check: EP flagged but no EP target.")
-      (etx, ety), (cx, cy) = ep
-      if (etx, ety) != (mv.tx, mv.ty):
-        raise ValueError("causes_self_check: EP destination mismatch.")
-      ep_victim_pos = (cx, cy)
-      ep_victim_piece = self.at(cx, cy)
+      bucket = self._pieces.get(side_piece.color)
+      if bucket is not None:
+        bucket.pop(side_piece, None)
+      if _is_royal(side_piece):
+        self._royal_pos[side_piece.color].discard((mv.fx, mv.fy))
+      self.grid[mv.fx][mv.fy].set_piece(None)
 
-    # 2) Mô phỏng và kiểm tra
-    in_check = True
+      captured_piece = None
+      captured_pos: tuple[int, int] | None = None
+      if mv.is_en_passant:
+        ep = prev_ep
+        if not ep or not isinstance(ep, (list, tuple)) or len(ep) != 2:
+          raise ValueError("causes_self_check: EP flagged but no EP target.")
+        (etx, ety), (cx, cy) = ep
+        if (etx, ety) != (mv.tx, mv.ty):
+          raise ValueError("causes_self_check: EP destination mismatch.")
+        captured_piece = self.at(cx, cy)
+        captured_pos = (cx, cy)
+        if captured_piece is not None:
+          bucket_c = self._pieces.get(captured_piece.color)
+          if bucket_c is not None:
+            bucket_c.pop(captured_piece, None)
+          if _is_royal(captured_piece):
+            self._royal_pos[captured_piece.color].discard((cx, cy))
+          self.grid[cx][cy].set_piece(None)
+      else:
+        captured_piece = self.at(mv.tx, mv.ty)
+        captured_pos = (mv.tx, mv.ty)
+        if captured_piece is not None:
+          if captured_piece.color == side_piece.color:
+            raise ValueError("causes_self_check: destination occupied by same color.")
+          bucket_c = self._pieces.get(captured_piece.color)
+          if bucket_c is not None:
+            bucket_c.pop(captured_piece, None)
+          if _is_royal(captured_piece):
+            self._royal_pos[captured_piece.color].discard((mv.tx, mv.ty))
+          self.grid[mv.tx][mv.ty].set_piece(None)
+
+      state["captured_piece"] = captured_piece
+      state["captured_pos"] = captured_pos
+
+      occupant: Piece = side_piece
+      if mv.promotion_to:
+        try:
+          from .piece_factory import create
+          promoted = create(mv.promotion_to, side_piece.color)
+          occupant = promoted
+          state["promoted_piece"] = promoted
+        except Exception as exc:
+          raise ValueError(f"causes_self_check: failed to promote to {mv.promotion_to!r}") from exc
+
+      self.grid[mv.tx][mv.ty].set_piece(occupant)
+      self._pieces.setdefault(occupant.color, {})[occupant] = (mv.tx, mv.ty)
+      if _is_royal(occupant):
+        self._royal_pos[occupant.color].add((mv.tx, mv.ty))
+
+      self.en_passant_target = None
+      if mv.is_double_step:
+        compute = getattr(self, "compute_en_passant_target", None)
+        if callable(compute):
+          try:
+            ep_pair = compute(mv, side_piece)
+            if ep_pair and isinstance(ep_pair, list) and len(ep_pair) == 2:
+              self.en_passant_target = ep_pair
+          except Exception:
+            pass
+
+      return state
+
+    def _unmake_move(state: dict[str, object]) -> None:
+      promoted_piece = state.get("promoted_piece")
+      occupant = promoted_piece if promoted_piece is not None else side_piece
+
+      bucket_occ = self._pieces.get(occupant.color)
+      if bucket_occ is not None:
+        bucket_occ.pop(occupant, None)
+      if _is_royal(occupant):
+        self._royal_pos[occupant.color].discard((mv.tx, mv.ty))
+      self.grid[mv.tx][mv.ty].set_piece(None)
+
+      captured_piece = state.get("captured_piece")
+      captured_pos = state.get("captured_pos")
+      if isinstance(captured_piece, Piece) and isinstance(captured_pos, tuple):
+        cx, cy = captured_pos
+        self.grid[cx][cy].set_piece(captured_piece)
+        self._pieces.setdefault(captured_piece.color, {})[captured_piece] = (cx, cy)
+        if _is_royal(captured_piece):
+          self._royal_pos[captured_piece.color].add((cx, cy))
+
+      self.grid[mv.fx][mv.fy].set_piece(side_piece)
+      self._pieces.setdefault(side_piece.color, {})[side_piece] = (mv.fx, mv.fy)
+      if _is_royal(side_piece):
+        self._royal_pos[side_piece.color].add((mv.fx, mv.fy))
+
+      self.en_passant_target = state.get("prev_ep")
+
+    state = _make_move()
     try:
-      self.apply_move(mv)
-      in_check = self.is_in_check(side)
+      return self.is_in_check(side)
     finally:
-      # 3) HOÀN TÁC — khôi phục theo thứ tự ngược
-
-      # 3.1) Khôi phục EP marker
-      self.en_passant_target = prev_ep
-
-      # 3.2) Xóa quân tại đích (kể cả promoted)
-      self.clear(mv.tx, mv.ty)
-
-      # 3.3) Nếu là ăn thường (không EP) và đích vốn có quân -> khôi phục đúng instance cũ
-      if (not mv.is_en_passant) and (dst_piece_before is not None):
-        cell = self.grid[mv.tx][mv.ty]
-        try:
-          cell.set_piece(dst_piece_before)
-        except Exception:
-          try:
-            cell.piece = dst_piece_before
-          except Exception:
-            self.grid[mv.tx][mv.ty] = dst_piece_before
-        if hasattr(self, "_index_add"):
-          self._index_add(mv.tx, mv.ty)
-        is_royal = getattr(dst_piece_before, "is_royal", getattr(dst_piece_before, "_is_royal", False))
-        if is_royal:
-          try:
-            self._royal_pos[dst_piece_before.color].add((mv.tx, mv.ty))
-          except Exception:
-            pass
-
-      # 3.4) Nếu là EP, khôi phục nạn nhân ở (cx,cy)
-      if mv.is_en_passant and ep_victim_pos is not None and ep_victim_piece is not None:
-        cx, cy = ep_victim_pos
-        cell = self.grid[cx][cy]
-        try:
-          cell.set_piece(ep_victim_piece)
-        except Exception:
-          try:
-            cell.piece = ep_victim_piece
-          except Exception:
-            self.grid[cx][cy] = ep_victim_piece
-        if hasattr(self, "_index_add"):
-          self._index_add(cx, cy)
-        is_royal = getattr(ep_victim_piece, "is_royal", getattr(ep_victim_piece, "_is_royal", False))
-        if is_royal:
-          try:
-            self._royal_pos[ep_victim_piece.color].add((cx, cy))
-          except Exception:
-            pass
-
-      # 3.5) Đặt lại quân nguồn về vị trí cũ (đúng instance gốc)
-      cell = self.grid[mv.fx][mv.fy]
-      try:
-        cell.set_piece(src_piece)
-      except Exception:
-        try:
-          cell.piece = src_piece
-        except Exception:
-          self.grid[mv.fx][mv.fy] = src_piece
-      if hasattr(self, "_index_add"):
-        self._index_add(mv.fx, mv.fy)
-      is_royal = getattr(src_piece, "is_royal", getattr(src_piece, "_is_royal", False))
-      if is_royal:
-        try:
-          self._royal_pos[src_piece.color].add((mv.fx, mv.fy))
-        except Exception:
-          pass
-
-    return in_check
-  
-  def is_in_check(self, color: str) -> bool:
-    """
-    Kiểm tra bên `color` ('w' hoặc 'b') có đang bị chiếu không.
-    Tương thích cache: self._royal_pos: dict[str, set[tuple[int,int]]]
-    (có thể có 0, 1, hoặc nhiều ô 'royal' cho mỗi màu).
-    Trả về:
-      - True nếu ít nhất một ô royal của `color` đang bị tấn công.
-      - False nếu không ô nào bị tấn công (hoặc set rỗng).
-    Raises:
-      ValueError: nếu self._royal_pos không tồn tại/không phải dict hoặc thiếu key `color`.
-    """
-    rp = getattr(self, "_royal_pos", None)
-    if not isinstance(rp, dict) or color not in rp:
-      raise ValueError("Thiếu cache royal cho màu yêu cầu.")
-
-    positions = rp[color]
-
-    # Chuẩn hoá phòng khi triển khai khác: tuple đơn → bọc thành set một phần tử
-    if isinstance(positions, tuple) and len(positions) == 2 and all(isinstance(v, int) for v in positions):
-      positions = {positions}
-
-    if not isinstance(positions, set):
-      raise ValueError("Định dạng cache royal không hợp lệ (kỳ vọng set[(x,y)]).")
-
-    opponent = 'b' if color == 'w' else 'w'
-    for rx, ry in positions:
-      if self.is_square_attacked(rx, ry, opponent):
-        return True
-    return False
-  
-  def is_square_attacked(self, x: int, y: int, by_color: str) -> bool:
-    """
-    Trả về True nếu ô (x,y) đang bị bên `by_color` khống chế.
-
-    Hiệu năng:
-      - Duyệt CHỈ các quân của `by_color` từ chỉ mục self._pieces → O(P) với P ≈ số quân màu đó.
-      - Thoát sớm ngay khi có 1 quân tấn công tới (x,y).
-      - Dựa vào Piece.can_attack(...) nên KHÔNG sinh list Move; EP mặc nhiên bị bỏ qua.
-
-    Ghi chú:
-      - Yêu cầu các quân đã có can_attack tối ưu (N,K,M,δ,Y,V,H,R,B,Q,P…).
-      - An toàn trước mục chỉ mục “lỗi thời” bằng cách đối chiếu lại p tại (i,j).
-    """
-    at = self.at
-    bucket = self._pieces.get(by_color, ())
-    for p, i, j in bucket:
-      if at(i, j) is not p:
-        continue
-      if p.can_attack(self, i, j, x, y):
-        return True
-    return False
-  
-  def _index_remove(self, x: int, y: int) -> None:
-    """Gỡ quân tại (x,y) khỏi chỉ mục (nếu đang có). An toàn với ô trống."""
-    p = self.at(x, y)
-    if p is None:
-      return
-    bucket = self._pieces[p.color]
-    for k, (q, i, j) in enumerate(bucket):
-      if q is p and i == x and j == y:
-        bucket.pop(k)
-        break
-  
-  def _index_add(self, x: int, y: int) -> None:
-    """Đưa quân tại (x,y) vào chỉ mục theo màu. Bỏ qua nếu ô trống."""
-    p = self.at(x, y)
-    if p is not None:
-      self._pieces[p.color].append((p, x, y))
-  
-  def compute_en_passant_target(self, mv: "Move", piece: "Piece") -> list[tuple[int, int]] | None:
-    """
-    Tính EP target sau một nước double-step (Pawn/Sergeant).
-
-    Trả về (schema dùng *list of tuple*):
-      [(tx_target, ty_target), (cx, cy)], trong đó:
-        - (tx_target, ty_target): ô mà quân đối phương sẽ "đi đến" khi bắt EP
-                                  (chính là ô trung gian mà quân vừa "đi qua").
-        - (cx, cy): ô chứa nạn nhân để xóa khi thực thi EP-capture
-                    (chính là ô đích hiện tại của nước double-step).
-
-    Yêu cầu:
-      - mv.is_double_step == True (giả định đã do generator đảm bảo).
-      - Không kiểm tra royal/check tại đây.
-    """
-    if not getattr(mv, "is_double_step", False):
-      return None
-
-    # Ô trung gian giữa nguồn và đích (bao quát cả thẳng và chéo 2 ô)
-    midx = (mv.fx + mv.tx) // 2
-    midy = (mv.fy + mv.ty) // 2
-
-    # Nạn nhân là quân vừa đứng ở ô đích của nước double-step
-    return [(midx, midy), (mv.tx, mv.ty)]
+      _unmake_move(state)
 
   def apply_move(self, mv: "Move") -> None:
-    """
-    Thực thi một pseudo-legal Move trên bàn cờ.
-
-    Hỗ trợ:
-      - Nước đi thường & ăn thường.
-      - En passant: đọc self.en_passant_target == [(tx,ty),(cx,cy)],
-        yêu cầu (tx,ty) == (mv.tx,mv.ty); xóa quân tại (cx,cy) rồi di chuyển.
-      - Set/Reset EP: mặc định reset; nếu mv.is_double_step thì gọi
-        compute_en_passant_target(mv, piece) (nếu có) để gán EP mới.
-      - Promotion: nếu mv.promotion_to khác None.
-
-    Ghi chú:
-      - Không kiểm tra “royal safety”.
-      - Không đổi lượt/không ghi lịch sử tại đây.
-    """
-    # 0) Kiểm tra cơ bản & lấy quân nguồn
+    """Apply a pseudo-legal move (including captures, EP, promotion, double-step)."""
     self._check_bounds(mv.fx, mv.fy)
     self._check_bounds(mv.tx, mv.ty)
 
@@ -416,15 +326,11 @@ class Board:
       raise ValueError(f"No piece at source ({mv.fx},{mv.fy}).")
 
     if getattr(mv, "piece", None) is not None and mv.piece is not piece:
-      # Có thể raise để siết chặt, hiện tạm bỏ qua
       pass
 
-    # === CẬP NHẬT CHỈ MỤC: chuẩn bị gỡ các mục liên quan trước khi sửa lưới ===
-    # Gỡ nguồn
     if hasattr(self, "_index_remove"):
       self._index_remove(mv.fx, mv.fy)
 
-    # 1) EN PASSANT: xoá nạn nhân trước khi di chuyển
     if mv.is_en_passant:
       ep = getattr(self, "en_passant_target", None)
       if not ep:
@@ -435,32 +341,25 @@ class Board:
       victim = self.at(cx, cy)
       if victim is None or victim.color == piece.color:
         raise ValueError("Invalid EN PASSANT victim square.")
-      # Gỡ nạn nhân EP khỏi index trước khi xóa
       if hasattr(self, "_index_remove"):
         self._index_remove(cx, cy)
-      self.clear(cx, cy)  # clear(...) nên đã tự xử lý royal-cache nếu nạn nhân là royal
+      self.clear(cx, cy)
 
-    # 2) Ăn thường (khi không phải EP)
     dst_piece = self.at(mv.tx, mv.ty)
     if dst_piece is not None and dst_piece.color == piece.color:
       raise ValueError("Destination occupied by same-color piece.")
     if dst_piece is not None and not mv.is_en_passant:
-      # Gỡ mục index của quân bị ăn ở đích trước khi xóa
       if hasattr(self, "_index_remove"):
         self._index_remove(mv.tx, mv.ty)
-      self.clear(mv.tx, mv.ty)  # clear(...) cũng xử lý royal-cache nếu cần
+      self.clear(mv.tx, mv.ty)
 
-    # 3) Di chuyển quân (nguồn -> đích) mà KHÔNG thay thế ô (Square)
-    #    - clear ô nguồn (đặt piece=None)
-    #    - đặt piece vào ô đích qua thuộc tính .piece
-    self.clear(mv.fx, mv.fy)  # nếu piece là royal, cache nguồn (nếu có) sẽ được unset tại đây
+    self.clear(mv.fx, mv.fy)
     dst_cell = self.grid[mv.tx][mv.ty]
     try:
       dst_cell.piece = piece
     except AttributeError:
       self.grid[mv.tx][mv.ty] = piece
 
-    # 4) Promotion (nếu có): thay quân trong ô đích
     promoted = None
     if mv.promotion_to:
       try:
@@ -471,34 +370,27 @@ class Board:
         except AttributeError:
           self.grid[mv.tx][mv.ty] = promoted
       except Exception:
-        # Nếu promote lỗi, giữ nguyên quân hiện tại
         promoted = None
 
-    # Sau khi đặt xong (đã tính cả promotion), bổ sung index cho ô đích
     if hasattr(self, "_index_add"):
       self._index_add(mv.tx, mv.ty)
 
-    # >>> ROYAL-CACHE: cập nhật vị trí mới nếu quân đến đích (sau promote) là royal
     occupant = promoted if promoted is not None else piece
     is_royal = getattr(occupant, "is_royal", None)
     if is_royal is None:
-      # fallback nếu chưa có property is_royal
       is_royal = getattr(occupant, "_is_royal", False)
     if is_royal:
       setter = getattr(self, "_royal_cache_set", None)
       if callable(setter):
         setter(occupant.color, (mv.tx, mv.ty))
       else:
-        # fallback an toàn nếu helper chưa sẵn sàng
         try:
           if not isinstance(getattr(self, "_royal_pos", None), dict):
-            self._royal_pos = {'w': None, 'b': None}
+            self._royal_pos = {"w": None, "b": None}
           self._royal_pos[occupant.color] = (mv.tx, mv.ty)
         except Exception:
           pass
-    # <<< ROYAL-CACHE
 
-    # 5) Reset EP mặc định; nếu double-step thì set EP mới (schema: list-of-tuples)
     self.en_passant_target = None
     if mv.is_double_step:
       compute = getattr(self, "compute_en_passant_target", None)
@@ -511,7 +403,7 @@ class Board:
           pass
 
     return
-      
+
   def collect_moves(self, x: int, y: int) -> list[Move]:
     """Trả về list[Move] cho quân ở (x,y); nếu quân còn trả (tx,ty) thì bọc thành Move."""
     self._check_bounds(x, y)
@@ -870,3 +762,5 @@ if __name__ == "__main__":
   print("In-check (w) #2:", b2.is_in_check('w'))
   print("Legal moves (w) #2:", len(b2.legal_moves_for('w')))
   print("Is checkmated (w) #2:", b2.is_checkmated('w'))
+
+

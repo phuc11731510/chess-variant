@@ -15,56 +15,51 @@ from core.move import Move
 from itertools import chain
 
 def position_key(board: "Board", turn: str) -> str:
-  """
-  Khóa vị thế (threefold) tối ưu:
-    - Duyệt _pieces O(P) bằng một vòng for nhờ chain(['w'],['b']).
-    - Fallback quét bảng chỉ khi index rỗng.
-  Thành phần: t (turn) + p (k,c,r,x,y) + ep (midx,midy hoặc "~").
-  """
+  """Return a canonical repetition key for the current position."""
   items: list[tuple[str, str, int, int, int]] = []
 
   idx = getattr(board, "_pieces", None)
-  if isinstance(idx, dict):
-    entries = chain(idx.get("w", ()), idx.get("b", ()))  # 1 vòng for
-    for e in entries:
-      if not isinstance(e, (list, tuple)) or len(e) not in (2, 3):
-        continue
-      if len(e) == 3:
-        p, x, y = e
-      else:  # (x,y) legacy
-        x, y = e
-        p = board.at(x, y)
-      if p is None:
-        continue
-      items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, int(x), int(y)))
 
-  elif idx:
-    # Iterable phẳng: duyệt 1 vòng for
-    for e in idx:
-      if not isinstance(e, (list, tuple)) or len(e) not in (2, 3):
-        continue
-      if len(e) == 3:
-        p, x, y = e
-      else:
-        x, y = e
-        p = board.at(x, y)
-      if p is None:
-        continue
-      items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, int(x), int(y)))
+  def _iter_bucket(bucket):
+    if not bucket:
+      return []
+    if isinstance(bucket, dict):
+      return list(bucket.items())
+    return list(bucket)
+
+  if isinstance(idx, dict):
+    entries = chain(_iter_bucket(idx.get("w")), _iter_bucket(idx.get("b")))
+  else:
+    entries = _iter_bucket(idx)
+
+  for entry in entries:
+    piece = None
+    x = y = None
+    if isinstance(entry, tuple):
+      if len(entry) == 3:
+        piece, x, y = entry
+      elif len(entry) == 2:
+        first, second = entry
+        if hasattr(first, "kind") and hasattr(first, "color") and isinstance(second, tuple) and len(second) == 2:
+          piece = first
+          x, y = second
+        else:
+          x, y = first, second
+          piece = board.at(x, y)
+    if piece is None:
+      continue
+    items.append((piece.kind, piece.color, 1 if getattr(piece, "_is_royal", False) else 0, int(x), int(y)))
 
   if not items:
-    # Fallback duy nhất dùng 2 vòng for (chỉ khi index rỗng → hiếm)
     H, W = getattr(board, "h", 10), getattr(board, "w", 10)
     for x in range(H):
       for y in range(W):
-        p = board.at(x, y)
-        if p:
-          items.append((p.kind, p.color, 1 if getattr(p, "_is_royal", False) else 0, x, y))
+        piece = board.at(x, y)
+        if piece is not None:
+          items.append((piece.kind, piece.color, 1 if getattr(piece, "_is_royal", False) else 0, x, y))
 
-  # Thứ tự ổn định
   items.sort(key=lambda t: (t[1], t[0], t[3], t[4], t[2]))
 
-  # EP-rights
   ep = getattr(board, "en_passant_target", None)
   ep_str = "~"
   if (isinstance(ep, (list, tuple)) and len(ep) == 2 and
